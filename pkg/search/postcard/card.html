@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { background: transparent; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial,
+      "Noto Sans", "Noto Sans CJK JP", sans-serif, "Noto Color Emoji";
+    -webkit-font-smoothing: antialiased;
+  }
+  #card {
+    width: 600px;
+    background: #161e27;
+    border: 1px solid #2e4052;
+    border-radius: 16px;
+    padding: 20px;
+    color: #f1f3f5;
+  }
+  .post-header { display: flex; align-items: center; gap: 10px; }
+  .avatar {
+    width: 46px; height: 46px; border-radius: 50%;
+    background: #2e4052; object-fit: cover; flex-shrink: 0;
+  }
+  .avatar.placeholder { display: flex; align-items: center; justify-content: center;
+    font-size: 22px; color: #8d9caa; }
+  .author { min-width: 0; }
+  .author .name {
+    font-size: 16px; font-weight: 700; line-height: 1.25;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .author .handle {
+    font-size: 14px; color: #8d9caa; line-height: 1.25;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .logo { margin-left: auto; font-size: 26px; flex-shrink: 0; }
+  .post-text {
+    font-size: 17px; line-height: 1.45; margin-top: 12px;
+    white-space: pre-wrap; word-wrap: break-word; overflow-wrap: break-word;
+  }
+  .media { margin-top: 12px; }
+  .media-grid { display: grid; gap: 4px; border-radius: 12px; overflow: hidden; }
+  .media-grid.count-1 img { width: 100%; max-height: 320px; object-fit: cover; display: block; }
+  .media-grid.count-2, .media-grid.count-3, .media-grid.count-4 { grid-template-columns: 1fr 1fr; }
+  .media-grid.count-2 img, .media-grid.count-3 img, .media-grid.count-4 img {
+    width: 100%; height: 150px; object-fit: cover; display: block;
+  }
+  .video-wrap { position: relative; border-radius: 12px; overflow: hidden; }
+  .video-wrap img { width: 100%; max-height: 320px; object-fit: cover; display: block; }
+  .play-badge {
+    position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    width: 56px; height: 56px; border-radius: 50%; background: rgba(0, 0, 0, 0.55);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .play-badge::after {
+    content: ""; display: block; margin-left: 5px;
+    border-style: solid; border-width: 11px 0 11px 18px;
+    border-color: transparent transparent transparent #fff;
+  }
+  .external {
+    display: flex; margin-top: 12px; border: 1px solid #2e4052;
+    border-radius: 12px; overflow: hidden;
+  }
+  .external .thumb { width: 100px; height: 100px; object-fit: cover; flex-shrink: 0; }
+  .external .meta { padding: 10px 12px; min-width: 0; }
+  .external .title {
+    font-size: 14px; font-weight: 600; line-height: 1.3;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  }
+  .external .desc {
+    font-size: 13px; color: #8d9caa; margin-top: 3px; line-height: 1.3;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  }
+  .external .host { font-size: 12px; color: #66778a; margin-top: 4px; }
+  .quote {
+    margin-top: 12px; border: 1px solid #2e4052; border-radius: 12px; padding: 12px;
+  }
+  .quote .post-header { gap: 8px; }
+  .quote .avatar { width: 22px; height: 22px; }
+  .quote .name { font-size: 14px; }
+  .quote .handle { font-size: 13px; }
+  .quote .quote-body { display: flex; gap: 10px; margin-top: 6px; }
+  .quote .quote-text {
+    font-size: 14px; line-height: 1.4; white-space: pre-wrap;
+    word-wrap: break-word; overflow-wrap: break-word;
+    display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden;
+    min-width: 0; flex: 1;
+  }
+  .quote .quote-img {
+    width: 64px; height: 64px; border-radius: 8px; object-fit: cover; flex-shrink: 0;
+  }
+  .stats {
+    display: flex; align-items: center; gap: 16px; margin-top: 14px;
+    font-size: 14px; color: #8d9caa;
+  }
+  .stats b { color: #f1f3f5; font-weight: 700; }
+  .stats .when { margin-left: auto; }
+  .replies { margin-top: 16px; border-top: 1px solid #253546; padding-top: 4px; }
+  .reply { display: flex; gap: 10px; padding-top: 12px; }
+  .reply .avatar { width: 34px; height: 34px; }
+  .reply .avatar.placeholder { font-size: 16px; }
+  .reply-main { min-width: 0; flex: 1; }
+  .reply-header { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+  .reply-header .name {
+    font-size: 14px; font-weight: 700;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .reply-header .handle {
+    font-size: 13px; color: #8d9caa; flex-shrink: 0;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .reply-text {
+    font-size: 15px; line-height: 1.4; margin-top: 2px;
+    white-space: pre-wrap; word-wrap: break-word; overflow-wrap: break-word;
+    display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden;
+  }
+  .reply-media { font-size: 13px; color: #208bfe; margin-top: 3px; }
+  .reply-likes { font-size: 13px; color: #8d9caa; margin-top: 4px; }
+  .more {
+    margin-top: 14px; font-size: 14px; color: #208bfe; font-weight: 600;
+  }
+  .footer {
+    margin-top: 14px; padding-top: 10px; border-top: 1px solid #253546;
+    font-size: 12px; color: #66778a; display: flex; justify-content: space-between;
+  }
+</style>
+</head>
+<body>
+<div id="card">
+  <div class="post-header">
+    {{template "avatar" dict "URL" .Post.Avatar "Class" "avatar"}}
+    <div class="author">
+      <div class="name">{{.Post.AuthorName}}</div>
+      <div class="handle">@{{.Post.AuthorHandle}}</div>
+    </div>
+    <div class="logo">🦋</div>
+  </div>
+
+  {{if .Post.Text}}<div class="post-text">{{.Post.Text}}</div>{{end}}
+
+  {{if .Post.Images}}
+  <div class="media">
+    <div class="media-grid count-{{len .Post.Images}}">
+      {{range .Post.Images}}<img src="{{.URL}}" alt="{{.Alt}}">{{end}}
+    </div>
+  </div>
+  {{end}}
+
+  {{if .Post.Video}}
+  <div class="media">
+    <div class="video-wrap">
+      <img src="{{.Post.Video.URL}}" alt="{{.Post.Video.Alt}}">
+      <div class="play-badge"></div>
+    </div>
+  </div>
+  {{end}}
+
+  {{if .Post.External}}
+  <div class="external">
+    {{if .Post.External.Thumb}}<img class="thumb" src="{{.Post.External.Thumb}}" alt="">{{end}}
+    <div class="meta">
+      <div class="title">{{.Post.External.Title}}</div>
+      {{if .Post.External.Description}}<div class="desc">{{.Post.External.Description}}</div>{{end}}
+      <div class="host">{{.Post.External.Host}}</div>
+    </div>
+  </div>
+  {{end}}
+
+  {{if .Post.Quote}}
+  <div class="quote">
+    <div class="post-header">
+      {{template "avatar" dict "URL" .Post.Quote.Avatar "Class" "avatar"}}
+      <div class="author">
+        <div class="name">{{.Post.Quote.AuthorName}} <span class="handle">@{{.Post.Quote.AuthorHandle}}</span></div>
+      </div>
+    </div>
+    <div class="quote-body">
+      {{if .Post.Quote.Text}}<div class="quote-text">{{.Post.Quote.Text}}</div>{{end}}
+      {{if .Post.Quote.Image}}<img class="quote-img" src="{{.Post.Quote.Image}}" alt="">{{end}}
+    </div>
+  </div>
+  {{end}}
+
+  <div class="stats">
+    <span><b>{{compact .Post.ReplyCount}}</b> replies</span>
+    <span><b>{{compact .Post.RepostCount}}</b> reposts</span>
+    <span><b>{{compact .Post.LikeCount}}</b> likes</span>
+    {{if .Post.Timestamp}}<span class="when">{{.Post.Timestamp}}</span>{{end}}
+  </div>
+
+  {{if .Replies}}
+  <div class="replies">
+    {{range .Replies}}
+    <div class="reply">
+      {{template "avatar" dict "URL" .Avatar "Class" "avatar"}}
+      <div class="reply-main">
+        <div class="reply-header">
+          <span class="name">{{.AuthorName}}</span>
+          <span class="handle">@{{.AuthorHandle}}</span>
+        </div>
+        {{if .Text}}<div class="reply-text">{{.Text}}</div>{{end}}
+        {{if or .Images .Video .External .Quote}}<div class="reply-media">📎 view attachment on Bluesky</div>{{end}}
+        {{if .LikeCount}}<div class="reply-likes">❤️ {{compact .LikeCount}}</div>{{end}}
+      </div>
+    </div>
+    {{end}}
+  </div>
+  {{end}}
+
+  {{if .HiddenReplies}}
+  <div class="more">View {{compact .HiddenReplies}} more {{if eq .HiddenReplies 1}}reply{{else}}replies{{end}} on Bluesky →</div>
+  {{end}}
+
+  <div class="footer">
+    <span>🦋 Bluesky</span>
+    {{if .Host}}<span>preview via {{.Host}}</span>{{end}}
+  </div>
+</div>
+</body>
+</html>
+
+{{define "avatar"}}{{if .URL}}<img class="{{.Class}}" src="{{.URL}}" alt="">{{else}}<div class="{{.Class}} placeholder">👤</div>{{end}}{{end}}

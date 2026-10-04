@@ -10,9 +10,12 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jazware/bsky-experiments/pkg/auth"
 	"github.com/jazware/bsky-experiments/pkg/indexer/store"
 	"github.com/jazware/bsky-experiments/pkg/search"
+	"github.com/jazware/bsky-experiments/pkg/search/appview"
 	"github.com/jazware/bsky-experiments/pkg/search/endpoints"
+	"github.com/jazware/bsky-experiments/pkg/search/postcard"
 	"github.com/jazware/bsky-experiments/pkg/usercount"
 	"github.com/jazware/bsky-experiments/telemetry"
 	"github.com/jazware/bsky-experiments/version"
@@ -38,6 +41,7 @@ func main() {
 		telemetry.CLIFlagMetricsListenAddress,
 		telemetry.CLIFlagServiceName,
 		telemetry.CLIFlagTracingSampleRatio,
+		telemetry.CLIFlagTracingRootSampleRatios,
 		&cli.StringFlag{
 			Name:    "listen-address",
 			Usage:   "listen address for HTTP server",
@@ -79,6 +83,48 @@ func main() {
 			Usage:   "duration to cache stats before refresh",
 			Value:   30 * time.Second,
 			EnvVars: []string{"STATS_CACHE_TTL"},
+		},
+		&cli.StringFlag{
+			Name:    "bsky-pds-host",
+			Usage:   "PDS entryway for authenticated AppView requests",
+			Value:   "https://bsky.social",
+			EnvVars: []string{"BSKY_PDS_HOST"},
+		},
+		&cli.StringFlag{
+			Name:    "bsky-identifier",
+			Usage:   "bluesky handle or DID for authenticated embed hydration (unauthenticated if empty)",
+			Value:   "",
+			EnvVars: []string{"BSKY_IDENTIFIER"},
+		},
+		&cli.StringFlag{
+			Name:    "bsky-app-password",
+			Usage:   "bluesky app password for authenticated embed hydration",
+			Value:   "",
+			EnvVars: []string{"BSKY_APP_PASSWORD"},
+		},
+		&cli.StringFlag{
+			Name:    "public-url",
+			Usage:   "externally-visible base URL of this service (e.g. https://bsky.jazco.dev); derived from requests if empty",
+			Value:   "",
+			EnvVars: []string{"PUBLIC_URL"},
+		},
+		&cli.DurationFlag{
+			Name:    "embed-cache-ttl",
+			Usage:   "duration to cache hydrated threads/profiles for embeds",
+			Value:   5 * time.Minute,
+			EnvVars: []string{"EMBED_CACHE_TTL"},
+		},
+		&cli.IntFlag{
+			Name:    "card-render-concurrency",
+			Usage:   "max concurrent headless-browser card renders",
+			Value:   2,
+			EnvVars: []string{"CARD_RENDER_CONCURRENCY"},
+		},
+		&cli.StringFlag{
+			Name:    "chromium-path",
+			Usage:   "path to the chromium/chrome binary for card rendering (searches PATH if empty)",
+			Value:   "",
+			EnvVars: []string{"CHROMIUM_PATH"},
 		},
 	}
 
@@ -173,12 +219,42 @@ func Search(cctx *cli.Context) error {
 		return fmt.Errorf("failed to create search service: %w", err)
 	}
 
+	// Create the AppView client for embed hydration
+	appviewClient := appview.NewClient(
+		logger,
+		cctx.String("bsky-pds-host"),
+		cctx.String("bsky-identifier"),
+		cctx.String("bsky-app-password"),
+		redisClient,
+		cctx.Duration("embed-cache-ttl"),
+	)
+	if appviewClient.Authenticated() {
+		logger.Info("appview client configured with credentials", "identifier", cctx.String("bsky-identifier"))
+	} else {
+		logger.Warn("no bluesky credentials configured; embeds will use the public appview and miss private-visibility profiles")
+	}
+
+	// Start the headless browser for post card rendering; embeds degrade to
+	// static images if no browser is available (e.g. local dev)
+	var renderer *postcard.Renderer
+	renderer, err = postcard.NewRenderer(ctx, logger, cctx.Int("card-render-concurrency"), cctx.String("chromium-path"))
+	if err != nil {
+		logger.Warn("post card renderer unavailable, embeds will fall back to static images", "error", err)
+		renderer = nil
+	} else {
+		defer renderer.Close()
+	}
+
 	// Create endpoints
 	api, err := endpoints.NewAPI(
 		logger,
 		searchService,
 		chStore,
 		cctx.String("magic-header-val"),
+		appviewClient,
+		renderer,
+		redisClient,
+		cctx.String("public-url"),
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create API: %w", err)
@@ -247,6 +323,29 @@ func Search(cctx *cli.Context) error {
 	e.POST("/repo/cleanup", api.CleanupOldRecords)
 	e.DELETE("/repo/cleanup", api.CancelCleanupJob)
 	e.GET("/repo/cleanup/stats", api.GetCleanupStats)
+
+	// API-key auth (same api_keys table the feedgen admin dashboard uses)
+	auther, err := auth.NewAuth(
+		100,
+		time.Hour,
+		10,
+		"did:web:bsky-search.jazco.io",
+		auth.NewStoreProvider(chStore),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create Auth: %w", err)
+	}
+
+	// Usercount PDS scrape list: inspect, and add official bsky hosts at runtime
+	e.GET("/pds", api.GetPDSList)
+	e.POST("/pds", api.AddPDSToList, auther.AuthenticateRequestViaAPIKey)
+
+	// Link-proxy embeds: bsky.app-shaped URLs serve rich previews to
+	// crawlers and redirect humans to bsky.app
+	e.GET("/profile/:ident", api.GetProfileLinkProxy)
+	e.GET("/profile/:ident/post/:rkey", api.GetPostLinkProxy)
+	e.GET("/embed/post/:ident/:rkey/card.png", api.GetPostCardImage)
+	e.GET("/oembed", api.GetOEmbed)
 
 	// Start HTTP server in a goroutine
 	serverErr := make(chan error, 1)

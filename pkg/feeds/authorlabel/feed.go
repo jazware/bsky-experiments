@@ -23,10 +23,10 @@ type LabelFeed struct {
 	GetPage func(ctx context.Context, userDID string, limit int64, cursor string) ([]*appbsky.FeedDefs_SkeletonFeedPost, *string, error)
 }
 
+// Explainer shown to logged-out users and users not on the label list:
+// https://bsky.app/profile/amityf.bsky.social/post/3mrv36uo4pc2a
 var unauthorizedResponse = []*appbsky.FeedDefs_SkeletonFeedPost{
-	{Post: "at://did:plc:wksnvmuo52yo3a32hkxdq4kb/app.bsky.feed.post/3l3frqadlo32h"},
-	{Post: "at://did:plc:wksnvmuo52yo3a32hkxdq4kb/app.bsky.feed.post/3l3frryudoz2i"},
-	{Post: "at://did:plc:wksnvmuo52yo3a32hkxdq4kb/app.bsky.feed.post/3l3frupeayv2e"},
+	{Post: "at://did:plc:wksnvmuo52yo3a32hkxdq4kb/app.bsky.feed.post/3mrv36uo4pc2a"},
 }
 
 type NotFoundError struct {

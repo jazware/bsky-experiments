@@ -13,6 +13,7 @@ import (
 	"github.com/bluesky-social/indigo/atproto/syntax"
 	"github.com/bluesky-social/indigo/repo"
 	"github.com/ipfs/go-cid"
+	"github.com/jazware/bsky-experiments/telemetry"
 	"github.com/labstack/echo/v4"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
@@ -78,8 +79,10 @@ func (api *API) GetRepoAsJSON(c echo.Context) error {
 	blocks := []string{}
 	profile := ""
 
-	r.ForEach(ctx, "", func(path string, nodeCid cid.Cid) error {
-		recordCid, rec, err := r.GetRecord(ctx, path)
+	// indigo opens a span per record: keep the repo walk out of the trace.
+	walkCtx := telemetry.WithoutChildSpans(ctx)
+	r.ForEach(walkCtx, "", func(path string, nodeCid cid.Cid) error {
+		recordCid, rec, err := r.GetRecord(walkCtx, path)
 		if err != nil {
 			log.Printf("Error getting record: %v", err)
 			return nil
@@ -275,8 +278,10 @@ func (api *API) GetListMembers(c echo.Context) error {
 	listMembers := []string{}
 	listObj := &bsky.GraphList{}
 
-	r.ForEach(ctx, "app.bsky.graph.list", func(path string, nodeCid cid.Cid) error {
-		recordCid, rec, err := r.GetRecord(ctx, path)
+	// indigo opens a span per record: keep the repo walk out of the trace.
+	walkCtx := telemetry.WithoutChildSpans(ctx)
+	r.ForEach(walkCtx, "app.bsky.graph.list", func(path string, nodeCid cid.Cid) error {
+		recordCid, rec, err := r.GetRecord(walkCtx, path)
 		if err != nil {
 			log.Printf("Error getting record: %v", err)
 			return nil

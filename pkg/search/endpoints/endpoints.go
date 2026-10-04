@@ -2,13 +2,16 @@ package endpoints
 
 import (
 	"log/slog"
+	"time"
 
 	"github.com/bluesky-social/indigo/atproto/identity"
 	"github.com/jazware/bsky-experiments/pkg/indexer/store"
 	"github.com/jazware/bsky-experiments/pkg/search"
+	"github.com/jazware/bsky-experiments/pkg/search/appview"
+	"github.com/jazware/bsky-experiments/pkg/search/postcard"
+	"github.com/redis/go-redis/v9"
 	"go.opentelemetry.io/otel"
 	"golang.org/x/time/rate"
-	"time"
 )
 
 type API struct {
@@ -18,6 +21,12 @@ type API struct {
 	Directory       identity.Directory
 	CheckoutLimiter *rate.Limiter
 	MagicHeaderVal  string
+
+	// Link-proxy embed dependencies
+	Appview   *appview.Client
+	Renderer  *postcard.Renderer // nil disables card rendering
+	Redis     *redis.Client
+	PublicURL string // externally-visible base URL; derived from the request when empty
 }
 
 var tracer = otel.Tracer("search-api")
@@ -27,6 +36,10 @@ func NewAPI(
 	searchService *search.SearchService,
 	store *store.Store,
 	magicHeaderVal string,
+	appviewClient *appview.Client,
+	renderer *postcard.Renderer,
+	redisClient *redis.Client,
+	publicURL string,
 ) (*API, error) {
 	dir := identity.DefaultDirectory()
 
@@ -37,5 +50,9 @@ func NewAPI(
 		Directory:       dir,
 		MagicHeaderVal:  magicHeaderVal,
 		CheckoutLimiter: rate.NewLimiter(rate.Every(2*time.Second), 1),
+		Appview:         appviewClient,
+		Renderer:        renderer,
+		Redis:           redisClient,
+		PublicURL:       publicURL,
 	}, nil
 }

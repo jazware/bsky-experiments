@@ -13,6 +13,10 @@ HTTP service providing Bluesky-compatible feed endpoints. Implements trending/ho
 ### Search Service (`cmd/search`, `pkg/search`)
 HTTP service for search, statistics, and repository maintenance. Provides site-wide analytics, stats caching, and cleanup operations.
 
+The total-users stat comes from `pkg/usercount`, which scrapes `listRepos` on every official Bluesky PDS. The scrape list lives in the Redis hash `usercount:pdslist` (host → `count|pagesize|cursor`), seeded/merged from `PDSHostList` in `pkg/usercount/usercount.go` at startup. `GET /pds` lists the current hosts and counts; `POST /pds {"host": "https://<name>.host.bsky.network"}` adds an official host at runtime (no restart) — the host must pass a `describeServer` probe, and third-party hosts are rejected.
+
+Also serves link-proxy embeds: bsky.app-shaped URLs (`/profile/:ident`, `/profile/:ident/post/:rkey`) return rich OpenGraph pages to link-preview crawlers and 302 humans to bsky.app. Post previews use a headless-Chromium screenshot of the post + top 2 replies (`/embed/post/:ident/:rkey/card.png`, `pkg/search/postcard`), hydrated via an authenticated AppView session (`pkg/search/appview`, `BSKY_IDENTIFIER`/`BSKY_APP_PASSWORD`) so posts from accounts with logged-out visibility disabled still preview. Append `?embed` to force the OG page in a browser.
+
 ## Development Workflow
 
 ```bash

@@ -220,6 +220,7 @@ dashboard-build:
     pnpm install
     echo "Building dashboard..."
     pnpm build
+    touch dist/.gitkeep
     echo "Dashboard built successfully"
 
 # Start the dashboard development server

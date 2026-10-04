@@ -40,6 +40,7 @@ func main() {
 		telemetry.CLIFlagMetricsListenAddress,
 		telemetry.CLIFlagServiceName,
 		telemetry.CLIFlagTracingSampleRatio,
+		telemetry.CLIFlagTracingRootSampleRatios,
 		&cli.StringFlag{
 			Name:    "ws-url",
 			Usage:   "full websocket path to the Jetstream subscription endpoint",
@@ -155,7 +156,10 @@ func Indexer(cctx *cli.Context) error {
 	// Registers a tracer Provider globally if the exporter endpoint is set
 	if os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT") != "" {
 		logger.Info("initializing tracer...")
-		shutdown, err := telemetry.StartTracing(cctx)
+		// A trace per firehose event (~350/s, all sub-millisecond) is mostly
+		// noise: keep 1% of them. Other roots (cursor writes, batch inserts)
+		// stay at tracing-sample-ratio.
+		shutdown, err := telemetry.StartTracing(cctx, telemetry.WithRootSpanRatio("HandleStreamEvent", 0.01))
 		if err != nil {
 			return fmt.Errorf("failed to start tracing: %+v", err)
 		}

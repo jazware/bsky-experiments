@@ -1,3 +1,6 @@
+# Explicit project name: packages/oracle/build/indexer would otherwise also
+# default to "indexer" and `docker compose down` there would remove this one.
+name: indexer
 services:
   indexer:
     build:

@@ -32,16 +32,17 @@ RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo \
     -ldflags "-X github.com/jazware/mono/packages/version.GitCommit=${GIT_COMMIT} -X github.com/jazware/mono/packages/version.BuildTime=${BUILD_TIME}" \
     -o search ./cmd/search
 
-# Stage 2: Import SSL certificates
-FROM alpine:latest as certs
-
-RUN apk --update add ca-certificates
-
-# Stage 3: Build a minimal Docker image
+# Stage 2: Build a minimal Docker image
 FROM debian:stable-slim
 
-# Import the SSL certificates from the first stage.
-COPY --from=certs /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+# Chromium + fonts for rendering post embed cards (screenshots), plus certs
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    chromium \
+    fonts-noto-core \
+    fonts-noto-cjk \
+    fonts-noto-color-emoji \
+    && rm -rf /var/lib/apt/lists/*
 
 # Copy the binary from the first stage.
 COPY --from=builder /app/atproto/search .

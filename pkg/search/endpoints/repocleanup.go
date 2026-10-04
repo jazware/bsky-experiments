@@ -22,6 +22,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/ipfs/go-cid"
 	"github.com/jazware/bsky-experiments/pkg/indexer/store"
+	"github.com/jazware/bsky-experiments/telemetry"
 	"github.com/labstack/echo/v4"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"golang.org/x/sync/semaphore"
@@ -256,13 +257,15 @@ func (api *API) enqueueCleanupJob(ctx context.Context, req CleanupOldRecordsRequ
 	lk := sync.Mutex{}
 
 	// Iterate over records in the repo to find the ones to delete
-	err = rr.ForEach(ctx, "app.bsky.feed.", func(path string, nodeCid cid.Cid) error {
+	// indigo opens a span per record: keep the repo walk out of the trace.
+	walkCtx := telemetry.WithoutChildSpans(ctx)
+	err = rr.ForEach(walkCtx, "app.bsky.feed.", func(path string, nodeCid cid.Cid) error {
 		log := log.With("path", path)
 		// Skip threadgates
 		if strings.Contains(path, "threadgate") {
 			return nil
 		}
-		_, rec, err := rr.GetRecord(ctx, path)
+		_, rec, err := rr.GetRecord(walkCtx, path)
 		if err != nil {
 			log.Error("Error getting record", "error", err)
 			return nil
@@ -455,6 +458,9 @@ var maxDeletesPerHour = 4000
 var maxDeletesPerDay = 30_000
 
 func (api *API) cleanupNextBatch(ctx context.Context, job store.RepoCleanupJob) (*store.RepoCleanupJob, error) {
+	ctx, span := tracer.Start(ctx, "cleanupNextBatch")
+	defer span.End()
+
 	log := slog.With("source", "cleanup_next_batch", "job_id", job.JobID, "did", job.Repo)
 	log.Info("Cleaning up next batch")
 	// If the last deletion job ran today and we're at the max for the day, return
@@ -545,13 +551,15 @@ func (api *API) cleanupNextBatch(ctx context.Context, job store.RepoCleanupJob) 
 	lk := sync.Mutex{}
 
 	// Iterate over records in the repo to find the ones to delete
-	err = rr.ForEach(ctx, "app.bsky.feed.", func(path string, nodeCid cid.Cid) error {
+	// indigo opens a span per record: keep the repo walk out of the trace.
+	walkCtx := telemetry.WithoutChildSpans(ctx)
+	err = rr.ForEach(walkCtx, "app.bsky.feed.", func(path string, nodeCid cid.Cid) error {
 		log := log.With("path", path)
 		// Skip threadgates
 		if strings.Contains(path, "threadgate") {
 			return nil
 		}
-		_, rec, err := rr.GetRecord(ctx, path)
+		_, rec, err := rr.GetRecord(walkCtx, path)
 		if err != nil {
 			log.Error("Error getting record", "error", err)
 			return nil

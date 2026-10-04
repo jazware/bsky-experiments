@@ -24,6 +24,7 @@ type UserCount struct {
 	RedisClient *redis.Client
 	Prefix      string
 
+	mu   sync.RWMutex // guards PDSs
 	PDSs []*PDS
 }
 
@@ -89,6 +90,46 @@ func NewUserCount(ctx context.Context, redisClient *redis.Client) *UserCount {
 		CurrentUserCount: lastUserCount,
 		PDSs:             pdsSlice,
 	}
+}
+
+// HostStatus is a point-in-time view of a PDS in the scrape list.
+type HostStatus struct {
+	Host      string `json:"host"`
+	UserCount int    `json:"user_count"`
+}
+
+// Hosts returns a snapshot of the current scrape list.
+func (uc *UserCount) Hosts() []HostStatus {
+	uc.mu.RLock()
+	defer uc.mu.RUnlock()
+
+	hosts := make([]HostStatus, 0, len(uc.PDSs))
+	for _, pds := range uc.PDSs {
+		hosts = append(hosts, HostStatus{Host: pds.Host, UserCount: pds.UserCount})
+	}
+	return hosts
+}
+
+// AddPDS adds a host to the scrape list at runtime and persists it to redis so
+// it survives restarts. It returns false if the host is already in the list.
+// The host is picked up on the next GetUserCount refresh.
+func (uc *UserCount) AddPDS(ctx context.Context, host string) (bool, error) {
+	uc.mu.Lock()
+	defer uc.mu.Unlock()
+
+	for _, pds := range uc.PDSs {
+		if pds.Host == host {
+			return false, nil
+		}
+	}
+
+	if err := uc.RedisClient.HSet(ctx, uc.Prefix+":pdslist", host, "0|0|").Err(); err != nil {
+		return false, fmt.Errorf("persisting pds to redis: %w", err)
+	}
+
+	uc.PDSs = append(uc.PDSs, NewPDS(host, 25))
+	slog.Info("added PDS to scrape list at runtime", "host", host)
+	return true, nil
 }
 
 var PDSHostList = []string{
@@ -225,13 +266,20 @@ func NewPDS(host string, rps int) *PDS {
 func (uc *UserCount) GetUserCount(ctx context.Context) (int, error) {
 	ctx, span := otel.Tracer("usercount").Start(ctx, "GetUserCount")
 	defer span.End()
+	// Snapshot the list so a concurrent AddPDS doesn't race the refresh; a
+	// host added mid-refresh is picked up on the next cycle.
+	uc.mu.RLock()
+	pdss := make([]*PDS, len(uc.PDSs))
+	copy(pdss, uc.PDSs)
+	uc.mu.RUnlock()
+
 	var wg sync.WaitGroup
-	resultCh := make(chan int, len(uc.PDSs))
-	errorCh := make(chan error, len(uc.PDSs))
+	resultCh := make(chan int, len(pdss))
+	errorCh := make(chan error, len(pdss))
 
 	slog.Info("refreshing user counts")
 
-	for _, pds := range uc.PDSs {
+	for _, pds := range pdss {
 		wg.Add(1)
 		go func(pds *PDS) {
 			defer wg.Done()
@@ -299,7 +347,7 @@ func (uc *UserCount) GetUserCount(ctx context.Context) (int, error) {
 
 	// Store the PDS list in redis
 	pdsList := map[string]any{}
-	for _, pds := range uc.PDSs {
+	for _, pds := range pdss {
 		pdsList[pds.Host] = fmt.Sprintf("%d|%d|%s", pds.UserCount, pds.LastPageSize, pds.LastCursor)
 	}
 
