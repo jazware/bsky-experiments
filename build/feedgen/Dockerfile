@@ -1,10 +1,10 @@
 # Stage 1: Build the dashboard
-FROM node:22-alpine AS dashboard-builder
+FROM node:26-alpine AS dashboard-builder
 
 WORKDIR /app/dashboard
 
 # Install pnpm
-RUN corepack enable && corepack prepare pnpm@10.29.1 --activate
+RUN npm install -g pnpm@10.29.1
 
 # Copy package files first for better caching
 COPY atproto/dashboard/package.json atproto/dashboard/pnpm-lock.yaml* ./
