@@ -78,7 +78,7 @@ function Pagination({
             variant={page === currentPage ? 'default' : 'outline'}
             size="sm"
             onClick={() => onPageChange(page)}
-            className="min-w-[2.5rem]"
+            className="min-w-10"
           >
             {page}
           </Button>
@@ -178,9 +178,10 @@ export function FeedDetail() {
       ) : (
         <>
           <Card>
-            <CardHeader className="flex flex-row items-center justify-between gap-4 flex-wrap">
+            {/* v4 space-y margins the title rather than the search row; keep v3's offset on the search row */}
+            <CardHeader className="flex flex-row items-center justify-between gap-4 flex-wrap space-y-0">
               <CardTitle className="text-base">Feed Members</CardTitle>
-              <div className="flex items-center gap-2 flex-1 justify-end">
+              <div className="flex items-center gap-2 flex-1 justify-end mt-1.5">
                 <div className="relative max-w-xs">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                   <Input

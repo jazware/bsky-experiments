@@ -37,7 +37,9 @@ export function ApiKeyPrompt({ onApiKeySet }: ApiKeyPromptProps) {
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="apiKey">API Key</Label>
+              {/* space-y-2 margins the inline Label in v4, where it has no effect, so the gap lives on the Input */}
               <Input
+                className="mt-2"
                 id="apiKey"
                 type="password"
                 placeholder="Enter your API key"

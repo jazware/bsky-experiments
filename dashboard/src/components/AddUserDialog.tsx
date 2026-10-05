@@ -64,7 +64,9 @@ export function AddUserDialog({ feedName }: AddUserDialogProps) {
           <div className="py-4 space-y-4">
             <div className="space-y-2">
               <Label htmlFor="handle">Bluesky Handle</Label>
+              {/* space-y-2 margins the inline Label in v4, where it has no effect, so the gap lives on the Input */}
               <Input
+                className="mt-2"
                 id="handle"
                 placeholder="user.bsky.social"
                 value={handle}
