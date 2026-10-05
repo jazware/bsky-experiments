@@ -79,11 +79,9 @@ func (api *API) RedirectAtURI(c echo.Context) error {
 		identifier, err := syntax.ParseAtIdentifier(identString)
 		if err != nil {
 			return c.JSON(http.StatusBadRequest, map[string]string{"error": fmt.Errorf("failed to parse identifier: %w", err).Error()})
-		} else if identifier == nil {
-			return c.JSON(http.StatusBadRequest, map[string]string{"error": fmt.Errorf("invalid identifier: %s", identString).Error()})
 		}
 
-		ident, err := api.Directory.Lookup(ctx, *identifier)
+		ident, err := api.Directory.Lookup(ctx, identifier)
 		if err != nil {
 			return c.JSON(http.StatusBadRequest, map[string]string{"error": fmt.Errorf("failed to lookup identity: %w", err).Error()})
 		} else if ident == nil {

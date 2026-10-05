@@ -1,0 +1,7 @@
+{
+  "version": 3,
+  "sources": ["../../src/internal/is-development.false.ts"],
+  "sourcesContent": ["export const IS_DEVELOPMENT = false;\n"],
+  "mappings": ";;;;;;;;;;;;;;;;;;;;AAAA;AAAA;AAAA;AAAA;AAAA;AAAO,IAAM,iBAAiB;",
+  "names": []
+}

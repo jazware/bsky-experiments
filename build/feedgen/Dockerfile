@@ -4,7 +4,7 @@ FROM node:26-alpine AS dashboard-builder
 WORKDIR /app/dashboard
 
 # Install pnpm
-RUN npm install -g pnpm@10.29.1
+RUN npm install -g pnpm@10.34.6
 
 # Copy package files first for better caching
 COPY atproto/dashboard/package.json atproto/dashboard/pnpm-lock.yaml* ./
@@ -19,7 +19,7 @@ COPY atproto/dashboard/ ./
 RUN pnpm build
 
 # Stage 2: Build the Go binary
-FROM golang:1.26.0 AS builder
+FROM golang:1.26.8 AS builder
 
 # Build args for version info
 ARG GIT_COMMIT=unknown

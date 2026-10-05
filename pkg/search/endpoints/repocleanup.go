@@ -147,8 +147,8 @@ func (api *API) enqueueCleanupJob(ctx context.Context, req CleanupOldRecordsRequ
 	var ident *identity.Identity
 
 	atID, err := syntax.ParseAtIdentifier(req.Identifier)
-	if err == nil && atID != nil {
-		ident, err = api.Directory.Lookup(ctx, *atID)
+	if err == nil {
+		ident, err = api.Directory.Lookup(ctx, atID)
 		if err != nil {
 			log.Error("Error looking up identity", "error", err)
 			return nil, fmt.Errorf("error looking up identity: %w", err)

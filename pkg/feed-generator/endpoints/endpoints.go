@@ -115,7 +115,7 @@ func NewEndpoints(feedGenerator *feedgenerator.FeedGenerator, chStore *store.Sto
 		FeedGenerator:       feedGenerator,
 		UniqueSeenUsers:     uniqueSeenUsers,
 		FeedUsers:           map[string][]string{},
-		dir:                 &dir,
+		dir:                 dir,
 		Store:               chStore,
 		BatchInserter:       batchInserter,
 		DescriptionCacheTTL: 30 * time.Minute,

@@ -9,8 +9,7 @@ import (
 
 	"github.com/bluesky-social/indigo/atproto/identity"
 	"github.com/bluesky-social/indigo/atproto/syntax"
-	es256k "github.com/ericvolp12/jwt-go-secp256k1"
-	"github.com/golang-jwt/jwt"
+	"github.com/golang-jwt/jwt/v4"
 	lru "github.com/hashicorp/golang-lru/arc/v2"
 	"github.com/labstack/echo/v4"
 	"github.com/prometheus/client_golang/prometheus"
@@ -105,7 +104,7 @@ func NewAuth(
 		KeyCache:    keyCache,
 		KeyCacheTTL: keyCacheTTL,
 		ServiceDID:  serviceDID,
-		Dir:         &dir,
+		Dir:         dir,
 		KeyProvider: keyProvider,
 	}, nil
 }
@@ -132,7 +131,7 @@ func (auth *Auth) GetClaimsFromAuthHeader(ctx context.Context, authHeader string
 	accessToken := authHeaderParts[1]
 
 	parser := jwt.Parser{
-		ValidMethods: []string{es256k.SigningMethodES256K.Alg()},
+		ValidMethods: []string{es256k.Alg()},
 	}
 
 	token, err := parser.ParseWithClaims(accessToken, claims, func(token *jwt.Token) (any, error) {

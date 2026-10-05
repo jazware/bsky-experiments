@@ -1,5 +1,5 @@
 # Stage 1: Build the Go binary
-FROM golang:1.26.0 AS builder
+FROM golang:1.26.8 AS builder
 
 # Build args for version info
 ARG GIT_COMMIT=unknown
