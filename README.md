@@ -19,6 +19,8 @@ Also serves link-proxy embeds: bsky.app-shaped URLs (`/profile/:ident`, `/profil
 
 ## Development Workflow
 
+Production on the devbox is deployed by yeet (`deploy/yeet/stacks/atproto-*`, images from `just docker-push`); see [DEPLOY.md](DEPLOY.md). The `just` recipes below are the break-glass path.
+
 ```bash
 # Start services (uses sops for secret decryption)
 just common        # Start Redis (and maybe Clickhouse)

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -21,12 +22,17 @@ import (
 	"github.com/jazware/bsky-experiments/pkg/indexer/store"
 	"github.com/jazware/bsky-experiments/pkg/plc"
 	"github.com/jazware/bsky-experiments/pkg/profilehydrator"
+	"github.com/jazware/bsky-experiments/pkg/secretfile"
 	"github.com/jazware/bsky-experiments/telemetry"
 	"github.com/jazware/bsky-experiments/version"
 	"github.com/redis/go-redis/extra/redisotel/v9"
 	"github.com/redis/go-redis/v9"
 	"github.com/urfave/cli/v2"
 )
+
+// Jetstream delivers hundreds of events a second, so half a minute without
+// one means the stream is stuck, well before the 60 s liveness kill.
+const healthMaxEventAge = 30 * time.Second
 
 func main() {
 	app := cli.App{
@@ -192,11 +198,16 @@ func Indexer(cctx *cli.Context) error {
 		return fmt.Errorf("failed to ping redis: %+v", err)
 	}
 
+	chPassword, err := secretfile.Flag(cctx, "clickhouse-password", "CLICKHOUSE_PASSWORD")
+	if err != nil {
+		return err
+	}
+
 	// Create a ClickHouse store
 	clickhouseStore, err := store.NewStore(
 		cctx.String("clickhouse-address"),
 		cctx.String("clickhouse-username"),
-		cctx.String("clickhouse-password"),
+		chPassword,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create clickhouse store: %+v", err)
@@ -213,6 +224,24 @@ func Indexer(cctx *cli.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to create indexer: %+v", err)
 	}
+
+	// On the metrics listener (StartMetrics serves DefaultServeMux). The
+	// cursor loaded from Redis carries the previous run's processed-at time,
+	// so this stays 503 after a restart until a fresh event lands.
+	http.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		seq, processedAt := idx.Progress.Get()
+		age := time.Since(processedAt)
+		status := http.StatusOK
+		if age > healthMaxEventAge {
+			status = http.StatusServiceUnavailable
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"last_seq":         seq,
+			"last_event_age_s": age.Seconds(),
+		})
+	})
 
 	// Start a goroutine to manage the cursor, saving the current cursor every 5 seconds
 	shutdownCursorManager := make(chan struct{})

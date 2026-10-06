@@ -1,5 +1,5 @@
 # Stage 1: Build the dashboard
-FROM node:26-alpine AS dashboard-builder
+FROM --platform=$BUILDPLATFORM node:26-alpine AS dashboard-builder
 
 WORKDIR /app/dashboard
 
@@ -19,11 +19,13 @@ COPY atproto/dashboard/ ./
 RUN pnpm build
 
 # Stage 2: Build the Go binary
-FROM golang:1.26.8 AS builder
+FROM --platform=$BUILDPLATFORM golang:1.26.8 AS builder
 
 # Build args for version info
 ARG GIT_COMMIT=unknown
 ARG BUILD_TIME=unknown
+ARG TARGETOS=linux
+ARG TARGETARCH
 
 # Create a directory for the application
 WORKDIR /app
@@ -52,12 +54,12 @@ COPY --from=dashboard-builder /app/dashboard/dist ./dashboard/dist
 COPY atproto/dashboard/embed.go ./dashboard/embed.go
 
 # Build the application with version info
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo \
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -a -installsuffix cgo \
     -ldflags "-X github.com/jazware/mono/packages/version.GitCommit=${GIT_COMMIT} -X github.com/jazware/mono/packages/version.BuildTime=${BUILD_TIME}" \
     -o feedgen ./cmd/feedgen
 
 # Stage 2: Import SSL certificates
-FROM alpine:latest as certs
+FROM --platform=$BUILDPLATFORM alpine:latest AS certs
 
 RUN apk --update add ca-certificates
 

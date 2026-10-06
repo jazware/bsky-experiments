@@ -1,3 +1,11 @@
+# Build amd64 images on this Mac from the committed tree and push them to ghcr.io/jazware/mono/atproto-<service> (+ :main when HEAD is on main; PUSH=0 only loads). service: indexer, feedgen, search or all
+docker-push service="all" tag=`git rev-parse --short=12 HEAD`:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ "{{service}}" = all ]; then svcs=(indexer feedgen search); else svcs=({{service}}); fi
+    for s in "${svcs[@]}"; do build/mac-image.sh "$s" {{tag}}; done
+
+# Break-glass: the yeet stacks in deploy/yeet/stacks/atproto-* run these services (see DEPLOY.md).
 # Decrypt the indexer environment file and bring up the indexer service
 indexer:
     #!/usr/bin/env bash

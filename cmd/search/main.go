@@ -16,6 +16,7 @@ import (
 	"github.com/jazware/bsky-experiments/pkg/search/appview"
 	"github.com/jazware/bsky-experiments/pkg/search/endpoints"
 	"github.com/jazware/bsky-experiments/pkg/search/postcard"
+	"github.com/jazware/bsky-experiments/pkg/secretfile"
 	"github.com/jazware/bsky-experiments/pkg/usercount"
 	"github.com/jazware/bsky-experiments/telemetry"
 	"github.com/jazware/bsky-experiments/version"
@@ -168,12 +169,26 @@ func Search(cctx *cli.Context) error {
 		}()
 	}
 
+	secrets := map[string]string{}
+	for flag, env := range map[string]string{
+		"clickhouse-password": "CLICKHOUSE_PASSWORD",
+		"magic-header-val":    "MAGIC_HEADER_VAL",
+		"bsky-identifier":     "BSKY_IDENTIFIER",
+		"bsky-app-password":   "BSKY_APP_PASSWORD",
+	} {
+		v, err := secretfile.Flag(cctx, flag, env)
+		if err != nil {
+			return err
+		}
+		secrets[flag] = v
+	}
+
 	// Connect to ClickHouse
 	logger.Info("connecting to clickhouse", "address", cctx.String("clickhouse-address"))
 	chStore, err := store.NewStore(
 		cctx.String("clickhouse-address"),
 		cctx.String("clickhouse-username"),
-		cctx.String("clickhouse-password"),
+		secrets["clickhouse-password"],
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create ClickHouse store: %w", err)
@@ -223,13 +238,13 @@ func Search(cctx *cli.Context) error {
 	appviewClient := appview.NewClient(
 		logger,
 		cctx.String("bsky-pds-host"),
-		cctx.String("bsky-identifier"),
-		cctx.String("bsky-app-password"),
+		secrets["bsky-identifier"],
+		secrets["bsky-app-password"],
 		redisClient,
 		cctx.Duration("embed-cache-ttl"),
 	)
 	if appviewClient.Authenticated() {
-		logger.Info("appview client configured with credentials", "identifier", cctx.String("bsky-identifier"))
+		logger.Info("appview client configured with credentials", "identifier", secrets["bsky-identifier"])
 	} else {
 		logger.Warn("no bluesky credentials configured; embeds will use the public appview and miss private-visibility profiles")
 	}
@@ -250,7 +265,7 @@ func Search(cctx *cli.Context) error {
 		logger,
 		searchService,
 		chStore,
-		cctx.String("magic-header-val"),
+		secrets["magic-header-val"],
 		appviewClient,
 		renderer,
 		redisClient,
@@ -279,6 +294,7 @@ func Search(cctx *cli.Context) error {
 	e.Use(slogecho.NewWithFilters(
 		logger,
 		slogecho.IgnorePath("/metrics"),
+		slogecho.IgnorePath("/healthz"),
 	))
 
 	// Serve static files from the public folder
@@ -313,6 +329,10 @@ func Search(cctx *cli.Context) error {
 
 	// Prometheus metrics endpoint
 	e.GET("/metrics", echo.WrapHandler(promhttp.Handler()))
+
+	// ClickHouse and Redis answered before the router existed, so serving at
+	// all is what yeet's gate needs to know.
+	e.GET("/healthz", func(c echo.Context) error { return c.String(http.StatusOK, "ok") })
 
 	// Register routes
 	e.GET("/stats", api.GetStats)

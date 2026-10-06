@@ -18,6 +18,7 @@ import (
 	"github.com/jazware/bsky-experiments/pkg/feeds/hot"
 	"github.com/jazware/bsky-experiments/pkg/feeds/static"
 	"github.com/jazware/bsky-experiments/pkg/indexer/store"
+	"github.com/jazware/bsky-experiments/pkg/secretfile"
 	"github.com/jazware/bsky-experiments/telemetry"
 	"github.com/jazware/bsky-experiments/version"
 	"github.com/labstack/echo/v4"
@@ -126,12 +127,17 @@ func FeedGenerator(cctx *cli.Context) error {
 		}()
 	}
 
+	chPassword, err := secretfile.Flag(cctx, "clickhouse-password", "CLICKHOUSE_PASSWORD")
+	if err != nil {
+		return err
+	}
+
 	// Connect to ClickHouse
 	logger.Info("connecting to clickhouse", "address", cctx.String("clickhouse-address"))
 	chStore, err := store.NewStore(
 		cctx.String("clickhouse-address"),
 		cctx.String("clickhouse-username"),
-		cctx.String("clickhouse-password"),
+		chPassword,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create ClickHouse store: %w", err)
@@ -223,6 +229,7 @@ func FeedGenerator(cctx *cli.Context) error {
 			WithResponseBody: false,
 			Filters: []slogecho.Filter{
 				slogecho.IgnorePath("/metrics"),
+				slogecho.IgnorePath("/healthz"),
 			},
 			DefaultLevel:     slog.LevelInfo,
 			ClientErrorLevel: slog.LevelWarn,
@@ -258,6 +265,10 @@ func FeedGenerator(cctx *cli.Context) error {
 
 	// Prometheus metrics endpoint
 	e.GET("/metrics", echo.WrapHandler(promhttp.Handler()))
+
+	// ClickHouse and Redis answered before the router existed, so serving at
+	// all is what yeet's gate needs to know.
+	e.GET("/healthz", func(c echo.Context) error { return c.String(http.StatusOK, "ok") })
 
 	// Init auth provider
 	storeProvider := auth.NewStoreProvider(chStore)
