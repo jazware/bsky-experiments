@@ -5,10 +5,10 @@ them, one stack each, in `deploy/yeet/stacks/`:
 
 | Stack | Compose project | Container | Ports | Gate |
 |---|---|---|---|---|
-| `atproto-redis` | `common` | `atproto-redis` | host network, 6379 | none (see below) |
-| `atproto-indexer` | `indexer` | `atproto-indexer` | 8091 (metrics, pprof, `/healthz`) | `/healthz` on 8091, 5 passes in a row |
-| `atproto-feedgen` | `feedgen` | `feedgen` | 8094 (app), 8095 (metrics) | `/healthz` on 8094 |
-| `atproto-search` | `search` | `bsky-search` | 8092 (app), 8093 (metrics) | `/healthz` on 8092 |
+| `atproto-redis` | `atproto-redis` | `atproto-redis` | host network, 6379 | tcp 6379 |
+| `atproto-indexer` | `atproto-indexer` | `atproto-indexer` | 8091 (metrics, pprof, `/healthz`) | `/healthz` on 8091, 5 passes in a row |
+| `atproto-feedgen` | `atproto-feedgen` | `atproto-feedgen` | 8094 (app), 8095 (metrics) | `/healthz` on 8094 |
+| `atproto-search` | `atproto-search` | `atproto-search` | 8092 (app), 8093 (metrics) | `/healthz` on 8092 |
 
 The ports bind on every interface, as the hand-run compose files had them. feedsky.jazco.io and
 bsky-search.jazco.io route to 8094 and 8092 from outside this repo (no tunnel config here names
@@ -63,9 +63,9 @@ network and, for Redis, the `/data/redis` bind mount. The first plan from `yeet-
   container: the indexer's cursor is in Redis, written every five seconds, so a recreate replays a
   few seconds of Jetstream.
 
-search's compose service is called `indexer`, as in `build/search/docker-compose.yml`. The live
-container is labelled with that service name, and renaming it would make compose create a second
-`bsky-search` next to the old one.
+The stacks then moved off the hand-run project names (`common`, `indexer`, `feedgen`, `search`) to
+their own names, so logs, metrics and status key on one name: each old project was taken down and
+the stack deployed under its own (search's service is `search` and its container `atproto-search`).
 
 A first deploy has no earlier bundle to roll back to: a failed gate holds the deploy (`yeet
 approve`), and the new container keeps running.
@@ -79,8 +79,8 @@ cd ~/jazware/mono/packages/atproto
 git pull && just indexer     # decrypts env/indexer.enc.env, runs migrations, builds and starts it
 ```
 
-They take over the containers yeet started (same project and container names), so the next `yeet
-plan` shows those services changing back. `just indexer`, `just feedgen` and `just search` build
+Their project names are the old hand-run ones, so first stop yeet's container (`docker compose -p
+atproto-<service> down`; the container names clash otherwise), and redeploy with yeet afterwards. `just indexer`, `just feedgen` and `just search` build
 the image on the devbox instead of pulling the ghcr one.
 
 ## Secrets
