@@ -4,8 +4,11 @@
 # build/<service>/Dockerfile, pinned in ../.ko.yaml; feedgen's dashboard is
 # built first, since the binary embeds it.
 #
-#   build/ko-image.sh <indexer|feedgen|search> [tag]   (or: just docker-push <service> [tag])
-#   build/ko-image.sh <service> base                   (or: just image-base <service>)
+#   build/ko-image.sh <indexer|feedgen|search|all> [tag]   (or: just image-push [service] [tag])
+#   build/ko-image.sh <service> base                       (or: just image-base <service>)
+#
+# `all` exports the tree once and builds the three services at once, each its
+# own build with its own image and tag (oci_all in scripts/oci/lib.sh).
 #
 # Builds the committed tree; uncommitted changes under packages/atproto,
 # version or telemetry stop it (DIRTY=1 builds them as <sha>-dirty). Also tags
@@ -14,10 +17,19 @@
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 . "$here/../../../scripts/oci/lib.sh"
-svc=${1:?usage: ko-image.sh <indexer|feedgen|search> [tag|base]}
-case $svc in indexer | feedgen | search) ;; *) echo "ko-image: unknown service $svc" >&2; exit 2 ;; esac
-image=ghcr.io/jazware/mono/atproto-$svc
+svc=${1:?usage: ko-image.sh <indexer|feedgen|search|all> [tag|base]}
+case $svc in indexer | feedgen | search | all) ;; *) echo "ko-image: unknown service $svc" >&2; exit 2 ;; esac
+src=(packages/atproto packages/version packages/telemetry)
 
+if [ "$svc" = all ]; then
+  [ "${2:-}" != base ] || { echo "ko-image: base takes one service" >&2; exit 2; }
+  oci_init atproto ""
+  oci_export "${src[@]}"
+  oci_all "$0" "${2:-}" indexer feedgen search
+  exit
+fi
+
+image=ghcr.io/jazware/mono/atproto-$svc
 if [ "${2:-}" = base ]; then
   oci_init atproto "$image"
   oci_base_push "$here/$svc/Dockerfile" runtime-base "$here/../.ko.yaml" \
@@ -27,7 +39,7 @@ fi
 
 oci_tracked "$image" "${2:-}" "$0" "$@"
 oci_init atproto "$image" "${2:-}"
-oci_export packages/atproto packages/version packages/telemetry
+oci_export "${src[@]}"
 if [ "$svc" = feedgen ]; then
   oci_npm packages/atproto/dashboard
   oci_ui_into packages/atproto/dashboard/dist

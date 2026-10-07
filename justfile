@@ -1,9 +1,6 @@
-# Build amd64 images with ko from the committed tree and push them to ghcr.io/jazware/mono/atproto-<service> (+ :main when HEAD is on main; PUSH=0 loads ko.local/...). Prints the refs. service: indexer, feedgen, search or all (build/ko-image.sh)
+# Build amd64 images with ko from the committed tree and push them to ghcr.io/jazware/mono/atproto-<service> (+ :main when HEAD is on main; PUSH=0 loads ko.local/...). Prints the refs. service: indexer, feedgen, search or all, which builds the three at once (build/ko-image.sh)
 image-push service="all" tag=`git rev-parse --short=12 HEAD`:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [ "{{service}}" = all ]; then svcs=(indexer feedgen search); else svcs=({{service}}); fi
-    for s in "${svcs[@]}"; do build/ko-image.sh "$s" {{tag}}; done
+    build/ko-image.sh {{service}} {{tag}}
 
 alias docker-push := image-push
 
