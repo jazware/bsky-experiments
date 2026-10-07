@@ -1,5 +1,18 @@
-# Build amd64 images on this Mac from the committed tree and push them to ghcr.io/jazware/mono/atproto-<service> (+ :main when HEAD is on main; PUSH=0 only loads). service: indexer, feedgen, search or all
-docker-push service="all" tag=`git rev-parse --short=12 HEAD`:
+# Build amd64 images with ko from the committed tree and push them to ghcr.io/jazware/mono/atproto-<service> (+ :main when HEAD is on main; PUSH=0 loads ko.local/...). Prints the refs. service: indexer, feedgen, search or all (build/ko-image.sh)
+image-push service="all" tag=`git rev-parse --short=12 HEAD`:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ "{{service}}" = all ]; then svcs=(indexer feedgen search); else svcs=({{service}}); fi
+    for s in "${svcs[@]}"; do build/ko-image.sh "$s" {{tag}}; done
+
+alias docker-push := image-push
+
+# Rebuild a service's runtime base (its Dockerfile's runtime-base stage) and pin it in .ko.yaml
+image-base service:
+    build/ko-image.sh {{service}} base
+
+# The same images the old way: docker buildx with build/<service>/Dockerfile (build/mac-image.sh)
+docker-push-buildx service="all" tag=`git rev-parse --short=12 HEAD`:
     #!/usr/bin/env bash
     set -euo pipefail
     if [ "{{service}}" = all ]; then svcs=(indexer feedgen search); else svcs=({{service}}); fi

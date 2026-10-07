@@ -39,14 +39,20 @@ FROM --platform=$BUILDPLATFORM alpine:latest AS certs
 
 RUN apk --update add ca-certificates
 
-# Stage 3: Build a minimal Docker image
-FROM debian:stable-slim
+# runtime-base is everything but the binary: the base `just docker-push` puts
+# ko's layer on (pinned by digest in ../../.ko.yaml), so the image config lives
+# here for both builds. ko sets the entrypoint to /ko-app/indexer.
+FROM debian:stable-slim AS runtime-base
 
 # Import the SSL certificates from the first stage.
 COPY --from=certs /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 
+RUN groupadd --system --gid 10001 atproto \
+    && useradd --system --uid 10001 --gid atproto --no-create-home atproto
+USER atproto:atproto
+CMD ["./indexer"]
+
+FROM runtime-base AS runtime
+
 # Copy the binary from the first stage.
 COPY --from=builder /app/atproto/indexer .
-
-# Set the startup command to run the binary
-CMD ["./indexer"]

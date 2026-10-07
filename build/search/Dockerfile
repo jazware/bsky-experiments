@@ -35,19 +35,26 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -a -installsuffix c
     -o search ./cmd/search
 
 # Stage 2: Build a minimal Docker image
-FROM debian:stable-slim
+# runtime-base is everything but the binary: the base `just docker-push` puts
+# ko's layer on (pinned by digest in ../../.ko.yaml), so the image config lives
+# here for both builds. ko sets the entrypoint to /ko-app/search.
+FROM debian:stable-slim AS runtime-base
 
-# Chromium + fonts for rendering post embed cards (screenshots), plus certs
+# Chromium + fonts for rendering post embed cards (screenshots), plus certs.
+# Chromium wants a writable home for its profile and crash dirs.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     chromium \
     fonts-noto-core \
     fonts-noto-cjk \
     fonts-noto-color-emoji \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --system --gid 10001 atproto \
+    && useradd --system --uid 10001 --gid atproto --home-dir /home/atproto --create-home atproto
+USER atproto:atproto
+CMD ["./search"]
+
+FROM runtime-base AS runtime
 
 # Copy the binary from the first stage.
 COPY --from=builder /app/atproto/search .
-
-# Set the startup command to run the binary
-CMD ["./search"]
