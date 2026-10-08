@@ -24,7 +24,7 @@ just docker-push              # all three: ghcr.io/jazware/mono/atproto-<service
 just docker-push search       # one of indexer, feedgen, search
 ```
 
-It builds the committed tree only (`git archive HEAD` of packages/atproto, version and telemetry,
+It builds the committed tree only (`vcs_archive HEAD` of packages/atproto, version and telemetry,
 the Dockerfiles' `packages/` context) for linux/amd64. The Go stages cross-compile on the Mac's own
 platform. search's runtime stage runs apt for Chromium under emulation, so if that fails with "exec
 format error", OrbStack lost Rosetta: `orb stop && orb start`.
