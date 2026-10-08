@@ -5,7 +5,7 @@
 #
 #   build/mac-image.sh <indexer|feedgen|search> [tag]   (or: just docker-push <service> [tag])
 #
-# Builds the committed tree (`git archive HEAD`), so uncommitted edits never
+# Builds the committed tree (vcs_archive), so uncommitted edits never
 # reach an image. The Dockerfiles' context is packages/ and they only read
 # atproto, version and telemetry, so only those are archived. Also pushes :main
 # when HEAD is on main, since that's the tag the yeet stacks pin.
@@ -15,20 +15,23 @@ set -euo pipefail
 svc=${1:?usage: mac-image.sh <indexer|feedgen|search> [tag]}
 case $svc in indexer | feedgen | search) ;; *) echo "mac-image: unknown service $svc" >&2; exit 2 ;; esac
 IMAGE=${IMAGE:-ghcr.io/jazware/mono/atproto-$svc}
-cd "$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
-commit=$(git rev-parse --short=12 HEAD)
+. "$(dirname "$0")/../../../scripts/vcs.sh"
+cd "$(vcs_root -C "$(dirname "$0")")"
+commit=$(vcs_short)
+git_sha=$(vcs_delta_git_sha)
 tag=${2:-$commit}
 tags=("$tag")
-if [ "$tag" != main ] && git merge-base --is-ancestor HEAD main 2>/dev/null; then tags+=(main); fi
+if [ "$tag" != main ] && vcs_on_main 2>/dev/null; then tags+=(main); fi
 t_start=$(date +%s)
 ctx=$(mktemp -d)
 cfg=$(mktemp -d)
 trap 'rm -rf "$ctx" "$cfg"' EXIT
-git archive HEAD packages/atproto packages/version packages/telemetry | tar -x -C "$ctx"
+vcs_archive HEAD packages/atproto packages/version packages/telemetry | tar -x -C "$ctx"
 [ -f "$ctx/packages/atproto/build/$svc/Dockerfile" ] || { echo "mac-image: empty build context" >&2; exit 1; }
 docker buildx build --platform "${PLATFORM:-linux/amd64}" \
   --build-arg "GIT_COMMIT=$commit" \
   --build-arg "BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  ${git_sha:+--label "dev.jazco.delta.git-sha=$git_sha"} \
   "${tags[@]/#/--tag=$IMAGE:}" -f "$ctx/packages/atproto/build/$svc/Dockerfile" --load "$ctx/packages"
 if [ "${PUSH:-1}" = 1 ]; then
   # DOCKER_HOST keeps the current context's daemon (contexts live in DOCKER_CONFIG)
