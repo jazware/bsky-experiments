@@ -11,27 +11,27 @@ ARG TARGETARCH
 WORKDIR /app
 
 # Copy packages to maintain the relative structure
-COPY telemetry ./telemetry
-COPY version ./version
+COPY telemetry ./atproto/telemetry
+COPY version ./atproto/version
 
 # Set working directory to atproto package
 RUN mkdir -p /app/atproto
 WORKDIR /app/atproto
 
 # Copy in go.mod and go.sum first to leverage Docker cache
-COPY atproto/go.mod .
-COPY atproto/go.sum .
+COPY go.mod .
+COPY go.sum .
 
 # Fetch dependencies
 RUN go mod download
 
 # Copy relevant source files
-COPY atproto/pkg ./pkg
-COPY atproto/cmd/search ./cmd/search
+COPY pkg ./pkg
+COPY cmd/search ./cmd/search
 
 # Build the application with version info
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -a -installsuffix cgo \
-    -ldflags "-X github.com/jazware/mono/packages/version.GitCommit=${GIT_COMMIT} -X github.com/jazware/mono/packages/version.BuildTime=${BUILD_TIME}" \
+    -ldflags "-X github.com/jazware/bsky-experiments/version.GitCommit=${GIT_COMMIT} -X github.com/jazware/bsky-experiments/version.BuildTime=${BUILD_TIME}" \
     -o search ./cmd/search
 
 # Stage 2: Build a minimal Docker image

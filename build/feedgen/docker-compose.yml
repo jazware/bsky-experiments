@@ -1,8 +1,8 @@
 services:
   feedgen:
     build:
-      context: ../../../
-      dockerfile: atproto/build/feedgen/Dockerfile
+      context: ../..
+      dockerfile: build/feedgen/Dockerfile
       args:
         - GIT_COMMIT=${GIT_COMMIT:-unknown}
         - BUILD_TIME=${BUILD_TIME:-unknown}

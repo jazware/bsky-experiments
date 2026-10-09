@@ -1,8 +1,8 @@
 services:
   crawler:
     build:
-      context: ../../../
-      dockerfile: atproto/build/crawler/Dockerfile
+      context: ../..
+      dockerfile: build/crawler/Dockerfile
       args:
         - GIT_COMMIT=${GIT_COMMIT:-unknown}
         - BUILD_TIME=${BUILD_TIME:-unknown}
@@ -16,4 +16,5 @@ services:
       - GOGC=200
       - GOMEMLIMIT=48GiB
     volumes:
-      - /secundus/Documents/atproto/crawler/data:/data/rca
+      # CRAWLER_DATA_DIR: an absolute host path (`just crawler` reads it from env/crawler.env).
+      - ${CRAWLER_DATA_DIR:-../../data/crawler}:/data/rca

@@ -4,8 +4,8 @@ name: indexer
 services:
   indexer:
     build:
-      context: ../../../
-      dockerfile: atproto/build/indexer/Dockerfile
+      context: ../..
+      dockerfile: build/indexer/Dockerfile
       args:
         - GIT_COMMIT=${GIT_COMMIT:-unknown}
         - BUILD_TIME=${BUILD_TIME:-unknown}

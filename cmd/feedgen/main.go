@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"slices"
 	"syscall"
 	"time"
 
@@ -84,6 +85,12 @@ func main() {
 			Usage:    "DID of the feed actor",
 			Required: true,
 			EnvVars:  []string{"FEED_ACTOR_DID"},
+		},
+		&cli.StringSliceFlag{
+			Name:    "cors-allowed-hosts",
+			Usage:   "hostnames whose origins may call the API from a browser",
+			Value:   cli.NewStringSlice("localhost"),
+			EnvVars: []string{"CORS_ALLOWED_HOSTS"},
 		},
 	}
 
@@ -250,6 +257,7 @@ func FeedGenerator(cctx *cli.Context) error {
 	))
 
 	// CORS middleware
+	corsHosts := cctx.StringSlice("cors-allowed-hosts")
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
 		AllowOrigins: []string{"https://bsky.jazco.dev"},
 		AllowMethods: []string{http.MethodGet, http.MethodPut, http.MethodDelete, http.MethodOptions},
@@ -259,7 +267,7 @@ func FeedGenerator(cctx *cli.Context) error {
 			if err != nil {
 				return false, nil
 			}
-			return u.Hostname() == "localhost" || u.Hostname() == "10.0.6.32", nil
+			return slices.Contains(corsHosts, u.Hostname()), nil
 		},
 	}))
 

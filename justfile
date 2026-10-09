@@ -1,21 +1,3 @@
-# Build amd64 images with ko from the committed tree and push them to ghcr.io/jazware/mono/atproto-<service> (+ :main when HEAD is on main; PUSH=0 loads ko.local/...). Prints the refs. service: indexer, feedgen, search or all, which builds the three at once (build/ko-image.sh)
-image-push service="all" tag=`git rev-parse --short=12 HEAD`:
-    build/ko-image.sh {{service}} {{tag}}
-
-alias docker-push := image-push
-
-# Rebuild a service's runtime base (its Dockerfile's runtime-base stage) and pin it in .ko.yaml
-image-base service:
-    build/ko-image.sh {{service}} base
-
-# The same images the old way: docker buildx with build/<service>/Dockerfile (build/mac-image.sh)
-docker-push-buildx service="all" tag=`git rev-parse --short=12 HEAD`:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [ "{{service}}" = all ]; then svcs=(indexer feedgen search); else svcs=({{service}}); fi
-    for s in "${svcs[@]}"; do build/mac-image.sh "$s" {{tag}}; done
-
-# Break-glass: the yeet stacks in deploy/yeet/stacks/atproto-* run these services (see DEPLOY.md).
 # Decrypt the indexer environment file and bring up the indexer service
 indexer:
     #!/usr/bin/env bash
@@ -26,7 +8,7 @@ indexer:
     set -a; source env/indexer.env; set +a
     go run ./cmd/migrate up
     echo "Dumping schema..."
-    go run ./cmd/migrate dump-schema -o ../../.claude/skills/clickhouse-analyst/references/databases/default/_full_schema.sql
+    go run ./cmd/migrate dump-schema -o pkg/migrate/full_schema.sql
     echo "Starting indexer service with Docker Compose..."
     export GIT_COMMIT=$(git rev-parse --short HEAD)
     export BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -72,6 +54,7 @@ crawler:
     set -euo pipefail
     echo "Decrypting crawler.enc.env..."
     sops decrypt env/crawler.enc.env > env/crawler.env
+    set -a; source env/crawler.env; set +a
     echo "Starting crawler service with Docker Compose..."
     export GIT_COMMIT=$(git rev-parse --short HEAD)
     export BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -90,27 +73,31 @@ crawler-prepare:
     echo "Building crawl list from relay..."
     go run ./cmd/crawler prepare
 
-crawler-replay input_dir="/secundus/Documents/atproto/crawler/data" workers="6" *collections="":
+crawler-replay input_dir="" workers="6" *collections="":
     #!/usr/bin/env bash
     set -euo pipefail
     echo "Decrypting crawler.enc.env..."
     sops decrypt env/crawler.enc.env > env/crawler.env
     set -a; source env/crawler.env; set +a
-    args="--input-dir {{input_dir}} --workers {{workers}} --truncate"
+    input_dir="{{input_dir}}"
+    input_dir="${input_dir:-${CRAWLER_DATA_DIR:-data/crawler}}"
+    args="--input-dir $input_dir --workers {{workers}} --truncate"
     if [[ -n "{{collections}}" ]]; then
         args="$args --collections {{collections}}"
     fi
-    echo "Replaying segments from {{input_dir}} with {{workers}} workers..."
+    echo "Replaying segments from $input_dir with {{workers}} workers..."
     go run ./cmd/crawler replay $args
 
-crawler-tally input_dir="/secundus/Documents/atproto/crawler/data" *collections="":
+crawler-tally input_dir="" *collections="":
     #!/usr/bin/env bash
     set -euo pipefail
     echo "Decrypting crawler.enc.env..."
     sops decrypt env/crawler.enc.env > env/crawler.env
     set -a; source env/crawler.env; set +a
-    args="--input-dir {{input_dir}} --by-collection"
-    echo "Tallying records across segments in {{input_dir}}..."
+    input_dir="{{input_dir}}"
+    input_dir="${input_dir:-${CRAWLER_DATA_DIR:-data/crawler}}"
+    args="--input-dir $input_dir --by-collection"
+    echo "Tallying records across segments in $input_dir..."
     go run ./cmd/crawler tally $args
 
 crawler-create-mv:
@@ -129,7 +116,7 @@ crawler-reset:
     sops decrypt env/crawler.enc.env > env/crawler.env
     set -a; source env/crawler.env; set +a
     echo "Clearing crawl data and Redis state..."
-    go run ./cmd/crawler reset --output-dir /secundus/Documents/atproto/crawler/data
+    go run ./cmd/crawler reset --output-dir "${CRAWLER_DATA_DIR:-data/crawler}"
 
 # Bring up Redis and other common services
 common:
@@ -223,7 +210,7 @@ migrate-dump-schema:
         sops decrypt env/indexer.enc.env > env/indexer.env
     fi
     set -a; source env/indexer.env; set +a
-    go run ./cmd/migrate dump-schema -o ../../.claude/skills/clickhouse-analyst/references/databases/default/_full_schema.sql
+    go run ./cmd/migrate dump-schema -o pkg/migrate/full_schema.sql
 
 # ============================================================================
 # Dashboard

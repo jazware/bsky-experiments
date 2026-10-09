@@ -7,13 +7,13 @@ WORKDIR /app/dashboard
 RUN npm install -g pnpm@10.34.6
 
 # Copy package files first for better caching
-COPY atproto/dashboard/package.json atproto/dashboard/pnpm-lock.yaml* ./
+COPY dashboard/package.json dashboard/pnpm-lock.yaml* ./
 
 # Install dependencies
 RUN pnpm install --frozen-lockfile || pnpm install
 
 # Copy dashboard source
-COPY atproto/dashboard/ ./
+COPY dashboard/ ./
 
 # Build the dashboard
 RUN pnpm build
@@ -31,31 +31,31 @@ ARG TARGETARCH
 WORKDIR /app
 
 # Copy packages to maintain the relative structure
-COPY telemetry ./telemetry
-COPY version ./version
+COPY telemetry ./atproto/telemetry
+COPY version ./atproto/version
 
 # Set working directory to atproto package
 RUN mkdir -p /app/atproto
 WORKDIR /app/atproto
 
 # Copy in go.mod and go.sum first to leverage Docker cache
-COPY atproto/go.mod .
-COPY atproto/go.sum .
+COPY go.mod .
+COPY go.sum .
 
 # Fetch dependencies
 RUN go mod download
 
 # Copy relevant source files
-COPY atproto/pkg ./pkg
-COPY atproto/cmd/feedgen ./cmd/feedgen
+COPY pkg ./pkg
+COPY cmd/feedgen ./cmd/feedgen
 
 # Copy the built dashboard from the previous stage
 COPY --from=dashboard-builder /app/dashboard/dist ./dashboard/dist
-COPY atproto/dashboard/embed.go ./dashboard/embed.go
+COPY dashboard/embed.go ./dashboard/embed.go
 
 # Build the application with version info
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -a -installsuffix cgo \
-    -ldflags "-X github.com/jazware/mono/packages/version.GitCommit=${GIT_COMMIT} -X github.com/jazware/mono/packages/version.BuildTime=${BUILD_TIME}" \
+    -ldflags "-X github.com/jazware/bsky-experiments/version.GitCommit=${GIT_COMMIT} -X github.com/jazware/bsky-experiments/version.BuildTime=${BUILD_TIME}" \
     -o feedgen ./cmd/feedgen
 
 # Stage 2: Import SSL certificates
