@@ -5,6 +5,7 @@ import (
 	"net/http"
 	_ "net/http/pprof"
 
+	"github.com/jazware/bsky-experiments/telemetry/ops"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/urfave/cli/v2"
 )
@@ -34,6 +35,10 @@ func StartMetrics(cctx *cli.Context, opts ...MetricsOption) {
 	for _, opt := range opts {
 		opt(m)
 	}
+
+	// The default registry serves the GC's numbers too (ops.GoRuntimeMetrics),
+	// also to services that serve promhttp.Handler() on a port of their own.
+	ops.UseGoCollector()
 
 	// Start the metrics server.
 	logger.Info("starting metrics server", "address", m.listenAddr, "path", m.path)

@@ -19,7 +19,7 @@ COPY dashboard/ ./
 RUN pnpm build
 
 # Stage 2: Build the Go binary
-FROM --platform=$BUILDPLATFORM golang:1.26.8 AS builder
+FROM --platform=$BUILDPLATFORM golang:1.27.2 AS builder
 
 # Build args for version info
 ARG GIT_COMMIT=unknown

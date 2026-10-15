@@ -20,11 +20,11 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-// NewRegistry is a registry with the Go runtime and process collectors, the
-// series every service's dashboards expect.
+// NewRegistry is a registry with the Go runtime (GoCollector) and process
+// collectors, the series every service's dashboards and alerts expect.
 func NewRegistry() *prometheus.Registry {
 	r := prometheus.NewRegistry()
-	r.MustRegister(collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
+	r.MustRegister(GoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 	return r
 }
 
