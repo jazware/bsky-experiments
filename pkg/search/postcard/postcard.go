@@ -10,13 +10,11 @@ import (
 	"github.com/bluesky-social/indigo/api/bsky"
 )
 
-// Image is a displayable image in a card
 type Image struct {
 	URL string
 	Alt string
 }
 
-// External is a link-card embed
 type External struct {
 	URL         string
 	Host        string
@@ -25,7 +23,6 @@ type External struct {
 	Thumb       string
 }
 
-// Quote is an embedded (quoted) post
 type Quote struct {
 	AuthorName   string
 	AuthorHandle string
@@ -34,7 +31,6 @@ type Quote struct {
 	Image        string
 }
 
-// Post is the display model for a single post in a card
 type Post struct {
 	AuthorName   string
 	AuthorHandle string
@@ -50,7 +46,6 @@ type Post struct {
 	LikeCount    int64
 }
 
-// Card is the full display model: the main post plus its top replies
 type Card struct {
 	Post          Post
 	Replies       []Post
@@ -81,7 +76,6 @@ func formatTimestamp(raw string) string {
 	return t.UTC().Format("Jan 2, 2006 · 3:04 PM")
 }
 
-// postFromView converts an AppView PostView into the display model
 func postFromView(view *bsky.FeedDefs_PostView) Post {
 	p := Post{
 		ReplyCount:  deref(view.ReplyCount),

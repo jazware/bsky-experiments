@@ -9,7 +9,6 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 )
 
-// ActorHasLabel checks if an actor has a specific label
 func (s *Store) ActorHasLabel(ctx context.Context, actorDID, label string) (hasLabel bool, err error) {
 	ctx, done := observe(ctx, "query_row", &err,
 		attribute.String("actor.did", actorDID),
@@ -30,7 +29,6 @@ func (s *Store) ActorHasLabel(ctx context.Context, actorDID, label string) (hasL
 	return hasLabel, nil
 }
 
-// CreateActorLabel assigns a label to an actor
 func (s *Store) CreateActorLabel(ctx context.Context, actorDID, label string) (err error) {
 	_, done := observe(ctx, "exec", &err,
 		attribute.String("actor.did", actorDID),
@@ -51,7 +49,6 @@ func (s *Store) CreateActorLabel(ctx context.Context, actorDID, label string) (e
 	return nil
 }
 
-// DeleteActorLabel removes a label from an actor (marks as deleted)
 func (s *Store) DeleteActorLabel(ctx context.Context, actorDID, label string) (err error) {
 	_, done := observe(ctx, "exec", &err,
 		attribute.String("actor.did", actorDID),
@@ -72,7 +69,6 @@ func (s *Store) DeleteActorLabel(ctx context.Context, actorDID, label string) (e
 	return nil
 }
 
-// ListActorsByLabel returns all actors with a specific label
 func (s *Store) ListActorsByLabel(ctx context.Context, label string) (actors []string, err error) {
 	ctx, done := observe(ctx, "query", &err,
 		attribute.String("label", label))
@@ -105,7 +101,6 @@ func (s *Store) ListActorsByLabel(ctx context.Context, label string) (actors []s
 	return actors, nil
 }
 
-// ActorLabelRow represents a single actor label entry with metadata and profile info
 type ActorLabelRow struct {
 	ActorDID    string
 	Handle      string
@@ -137,7 +132,6 @@ func (s *Store) ListActorsByLabelPaginated(ctx context.Context, label string, pa
 		return actors, totalCount, nil
 	}
 
-	// No search - use efficient paginated query
 	countQuery := `
 		SELECT count(DISTINCT actor_did)
 		FROM actor_labels FINAL
@@ -149,7 +143,6 @@ func (s *Store) ListActorsByLabelPaginated(ctx context.Context, label string, pa
 
 	offset := max((page-1)*limit, 0)
 
-	// Use subquery to limit actor_labels first, then join with profiles
 	query := `
 		SELECT
 			al.actor_did,
@@ -192,7 +185,6 @@ func (s *Store) ListActorsByLabelPaginated(ctx context.Context, label string, pa
 // listActorsByLabelWithSearch fetches all members with profiles and filters in Go
 // This avoids expensive ILIKE queries on the large profiles table
 func (s *Store) listActorsByLabelWithSearch(ctx context.Context, label string, page int, limit int, search string) ([]ActorLabelRow, uint64, error) {
-	// Step 1: Get all actor_dids and time_us for this label (fast, small result)
 	labelQuery := `
 		SELECT actor_did, time_us
 		FROM actor_labels FINAL
@@ -228,7 +220,6 @@ func (s *Store) listActorsByLabelWithSearch(ctx context.Context, label string, p
 		return []ActorLabelRow{}, 0, nil
 	}
 
-	// Step 2: Fetch profiles for these specific DIDs only
 	profileQuery := `
 		SELECT did, handle, display_name
 		FROM profiles
@@ -259,7 +250,6 @@ func (s *Store) listActorsByLabelWithSearch(ctx context.Context, label string, p
 		return nil, 0, err
 	}
 
-	// Step 3: Combine results
 	var allMembers []ActorLabelRow
 	for _, m := range members {
 		row := ActorLabelRow{
@@ -274,7 +264,6 @@ func (s *Store) listActorsByLabelWithSearch(ctx context.Context, label string, p
 		allMembers = append(allMembers, row)
 	}
 
-	// Filter by search term (case-insensitive substring match)
 	searchLower := strings.ToLower(search)
 	var filtered []ActorLabelRow
 	for _, m := range allMembers {
@@ -287,7 +276,6 @@ func (s *Store) listActorsByLabelWithSearch(ctx context.Context, label string, p
 
 	totalCount := uint64(len(filtered))
 
-	// Paginate
 	offset := max((page-1)*limit, 0)
 	end := min(offset+limit, len(filtered))
 	if offset >= len(filtered) {

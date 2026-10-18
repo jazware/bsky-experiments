@@ -47,7 +47,6 @@ func ReadCAR(r io.Reader) (cid.Cid, map[cid.Cid][]byte, error) {
 	return root, blocks, nil
 }
 
-// readHeader parses the CARv1 header and returns the single root CID.
 func readHeader(br *bufio.Reader) (cid.Cid, error) {
 	headerLen, err := binary.ReadUvarint(br)
 	if err != nil {

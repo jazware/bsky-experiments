@@ -35,7 +35,6 @@ func (api *API) GetRepoAsJSON(c echo.Context) error {
 
 	var url = "https://bsky.network/xrpc/com.atproto.sync.getRepo?did=" + repoDID
 
-	// GET and CAR decode the body
 	client := &http.Client{
 		Transport: otelhttp.NewTransport(http.DefaultTransport),
 		Timeout:   120 * time.Second,
@@ -49,8 +48,13 @@ func (api *API) GetRepoAsJSON(c echo.Context) error {
 	httpReq.Header.Set("Accept", "application/vnd.ipld.car")
 	httpReq.Header.Set("User-Agent", "jaz-repo-checkout-search-API/0.0.1")
 
-	// Do your rate limit wait here
 	api.CheckoutLimiter.Wait(ctx)
+
+	release, err := api.repoScans().acquire(ctx, "")
+	if err != nil {
+		return c.JSON(http.StatusServiceUnavailable, map[string]string{"error": err.Error()})
+	}
+	defer release()
 
 	resp, err := client.Do(httpReq)
 	if err != nil {
@@ -88,15 +92,11 @@ func (api *API) GetRepoAsJSON(c echo.Context) error {
 			return nil
 		}
 
-		// Verify that the record cid matches the cid in the event
 		if recordCid != nodeCid {
 			log.Printf("mismatch in record and op cid: %s != %s", recordCid, nodeCid)
 			return nil
 		}
 
-		// Do something with the record `rec`
-		// collection := strings.Split(path, "/")[0]
-		// rkey := strings.Split(path, "/")[1]
 		switch rec := rec.(type) {
 		case *bsky.FeedPost:
 			recCreatedAt, parseError := dateparse.ParseAny(rec.CreatedAt)
@@ -209,7 +209,6 @@ func (api *API) GetListMembers(c echo.Context) error {
 
 	listURI, err := syntax.ParseATURI(uriParam)
 	if err != nil {
-		// Try to parse as https://bsky.app/profile/{handle_or_did}/lists/{rkey}
 		parts := strings.Split(uriParam, "/")
 		if len(parts) != 7 {
 			return c.JSON(http.StatusBadRequest, map[string]string{"error": fmt.Errorf("Error parsing URI: %w", err).Error()})
@@ -239,7 +238,6 @@ func (api *API) GetListMembers(c echo.Context) error {
 
 	var repoFetchURL = "https://bsky.network/xrpc/com.atproto.sync.getRepo?did=" + repoDID.String()
 
-	// GET and CAR decode the body
 	client := &http.Client{
 		Transport: otelhttp.NewTransport(http.DefaultTransport),
 		Timeout:   120 * time.Second,
@@ -253,8 +251,13 @@ func (api *API) GetListMembers(c echo.Context) error {
 	httpReq.Header.Set("Accept", "application/vnd.ipld.car")
 	httpReq.Header.Set("User-Agent", "jaz-repo-checkout-search-API/0.0.1")
 
-	// Do your rate limit wait here
 	api.CheckoutLimiter.Wait(ctx)
+
+	release, err := api.repoScans().acquire(ctx, "")
+	if err != nil {
+		return c.JSON(http.StatusServiceUnavailable, map[string]string{"error": err.Error()})
+	}
+	defer release()
 
 	resp, err := client.Do(httpReq)
 	if err != nil {
@@ -287,7 +290,6 @@ func (api *API) GetListMembers(c echo.Context) error {
 			return nil
 		}
 
-		// Verify that the record cid matches the cid in the event
 		if recordCid != nodeCid {
 			log.Printf("mismatch in record and op cid: %s != %s", recordCid, nodeCid)
 			return nil

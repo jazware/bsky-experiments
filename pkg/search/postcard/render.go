@@ -16,9 +16,7 @@ import (
 var tracer = otel.Tracer("postcard-renderer")
 
 const (
-	// CardWidth is the CSS pixel width of the rendered card
-	CardWidth = 600
-	// renderScale is the device scale factor (2 = retina-crisp PNGs)
+	CardWidth   = 600
 	renderScale = 2
 	// renderTimeout bounds a single render, including remote image fetches
 	renderTimeout = 20 * time.Second
@@ -27,7 +25,6 @@ const (
 	imageWaitTimeout = 8 * time.Second
 )
 
-// Renderer screenshots card HTML using a shared headless Chromium browser
 type Renderer struct {
 	logger      *slog.Logger
 	browserCtx  context.Context
@@ -87,7 +84,6 @@ func NewRenderer(ctx context.Context, logger *slog.Logger, concurrency int, brow
 	}, nil
 }
 
-// Close shuts down the browser
 func (r *Renderer) Close() {
 	r.ctxCancel()
 	r.allocCancel()

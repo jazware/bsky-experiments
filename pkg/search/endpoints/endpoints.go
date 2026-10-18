@@ -2,6 +2,7 @@ package endpoints
 
 import (
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/bluesky-social/indigo/atproto/identity"
@@ -22,11 +23,19 @@ type API struct {
 	CheckoutLimiter *rate.Limiter
 	MagicHeaderVal  string
 
-	// Link-proxy embed dependencies
 	Appview   *appview.Client
 	Renderer  *postcard.Renderer // nil disables card rendering
 	Redis     *redis.Client
 	PublicURL string // externally-visible base URL; derived from the request when empty
+
+	scansOnce sync.Once
+	scans     *scanLimiter
+}
+
+// repoScans is the limiter every whole-repo download goes through.
+func (api *API) repoScans() *scanLimiter {
+	api.scansOnce.Do(func() { api.scans = newScanLimiter(maxConcurrentRepoScans) })
+	return api.scans
 }
 
 var tracer = otel.Tracer("search-api")

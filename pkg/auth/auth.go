@@ -27,7 +27,6 @@ type KeyCacheEntry struct {
 	ExpiresAt time.Time
 }
 
-// Initialize Prometheus Metrics for cache hits and misses
 var cacheHits = promauto.NewCounterVec(prometheus.CounterOpts{
 	Name: "bsky_cache_hits_total",
 	Help: "The total number of cache hits",
@@ -64,14 +63,6 @@ type APIKeyProvider interface {
 	GetEntityFromAPIKey(ctx context.Context, apiKey string) (*FeedAuthEntity, error)
 }
 
-// NewAuth creates a new Auth instance with the given key cache size and TTL
-// The PLC Directory URL is also required, as well as the DID of the service
-// for JWT audience validation
-// The key cache is used to cache the public keys of users for a given TTL
-// The PLC Directory URL is used to fetch the public keys of users
-// The service DID is used to validate the audience of JWTs
-// The HTTP client is used to make requests to the PLC Directory
-// A rate limiter is used to limit the number of requests to the PLC Directory
 func NewAuth(
 	keyCacheSize int,
 	keyCacheTTL time.Duration,
@@ -84,7 +75,6 @@ func NewAuth(
 		return nil, fmt.Errorf("Failed to create key cache: %v", err)
 	}
 
-	// Initialize the HTTP client with OpenTelemetry instrumentation
 	client := http.Client{
 		Transport: otelhttp.NewTransport(http.DefaultTransport),
 	}
@@ -136,7 +126,6 @@ func (auth *Auth) GetClaimsFromAuthHeader(ctx context.Context, authHeader string
 
 	token, err := parser.ParseWithClaims(accessToken, claims, func(token *jwt.Token) (any, error) {
 		if claims, ok := token.Claims.(*jwt.StandardClaims); ok {
-			// Get the user's key from PLC Directory
 			userDID := claims.Issuer
 			entry, ok := auth.KeyCache.Get(userDID)
 			if ok && entry.ExpiresAt.After(time.Now()) {
@@ -153,7 +142,6 @@ func (auth *Auth) GetClaimsFromAuthHeader(ctx context.Context, authHeader string
 				return nil, fmt.Errorf("Failed to parse user DID: %v", err)
 			}
 
-			// Get the user's key from PLC Directory
 			id, err := auth.Dir.LookupDID(ctx, did)
 			if err != nil {
 				return nil, fmt.Errorf("Failed to lookup user DID: %v", err)
@@ -169,7 +157,6 @@ func (auth *Auth) GetClaimsFromAuthHeader(ctx context.Context, authHeader string
 				return nil, fmt.Errorf("Failed to parse user public key: %v", err)
 			}
 
-			// Add the ECDSA key to the cache
 			auth.KeyCache.Add(userDID, KeyCacheEntry{
 				Key:       parsedPubkey,
 				ExpiresAt: time.Now().Add(auth.KeyCacheTTL),
@@ -216,7 +203,6 @@ func (auth *Auth) AuthenticateRequestViaJWT(next echo.HandlerFunc) echo.HandlerF
 			return c.JSON(http.StatusUnauthorized, map[string]string{"error": fmt.Sprintf("Invalid audience (expected %s)", auth.ServiceDID)})
 		}
 
-		// Set claims Issuer to context as user DID
 		c.Set("actor_did", claims.Issuer)
 		span.SetAttributes(attribute.String("actor.did", claims.Issuer))
 		span.End()
@@ -224,9 +210,6 @@ func (auth *Auth) AuthenticateRequestViaJWT(next echo.HandlerFunc) echo.HandlerF
 	}
 }
 
-// AuthenticateRequestViaAPIKey authenticates a request via an API key
-// statically configured for the app, this is useful for testing and debugging
-// or use-case specific scenarios where a DID is not available.
 func (auth *Auth) AuthenticateRequestViaAPIKey(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		tracer := otel.Tracer("auth")

@@ -14,13 +14,11 @@ import (
 	"golang.org/x/time/rate"
 )
 
-// VerifiedRepo is a DiscoveredRepo with its verification status set.
 type VerifiedRepo struct {
 	DiscoveredRepo
 	Verified bool
 }
 
-// Verifier checks PDS claims against DID documents.
 type Verifier struct {
 	chConn     driver.Conn
 	httpClient *http.Client
@@ -28,7 +26,6 @@ type Verifier struct {
 	logger     *slog.Logger
 }
 
-// NewVerifier creates a new Verifier.
 func NewVerifier(chConn driver.Conn, logger *slog.Logger) *Verifier {
 	return &Verifier{
 		chConn: chConn,
@@ -49,7 +46,6 @@ func (v *Verifier) VerifyBatch(ctx context.Context, repos []DiscoveredRepo) []Ve
 		return nil
 	}
 
-	// Separate did:plc and did:web repos.
 	var plcDIDs []string
 	plcRepos := make(map[string][]DiscoveredRepo)
 	var webRepos []DiscoveredRepo
@@ -62,14 +58,12 @@ func (v *Verifier) VerifyBatch(ctx context.Context, repos []DiscoveredRepo) []Ve
 		case strings.HasPrefix(r.DID, "did:web:"):
 			webRepos = append(webRepos, r)
 		default:
-			// Unknown DID method — skip.
 			v.logger.Debug("skipping unknown DID method", "did", r.DID)
 		}
 	}
 
 	var results []VerifiedRepo
 
-	// Verify did:plc repos via ClickHouse.
 	if len(plcDIDs) > 0 {
 		plcPDS, err := v.lookupPLCState(ctx, plcDIDs)
 		if err != nil {
@@ -100,7 +94,6 @@ func (v *Verifier) VerifyBatch(ctx context.Context, repos []DiscoveredRepo) []Ve
 		}
 	}
 
-	// Verify did:web repos via HTTP.
 	for _, r := range webRepos {
 		if ctx.Err() != nil {
 			break
@@ -125,8 +118,6 @@ func (v *Verifier) VerifyBatch(ctx context.Context, repos []DiscoveredRepo) []Ve
 	return results
 }
 
-// lookupPLCState batch-queries ClickHouse for PDS endpoints of did:plc DIDs.
-// Returns a map of DID -> PDS URL.
 func (v *Verifier) lookupPLCState(ctx context.Context, dids []string) (map[string]string, error) {
 	rows, err := v.chConn.Query(ctx,
 		"SELECT did, pds FROM plc_did_state FINAL WHERE did IN (?)", dids)
@@ -158,18 +149,15 @@ type didService struct {
 	ServiceEndpoint string `json:"serviceEndpoint"`
 }
 
-// resolveDIDWeb resolves a did:web DID to find its PDS service endpoint.
 func (v *Verifier) resolveDIDWeb(ctx context.Context, did string) (string, error) {
 	if err := v.webLimiter.Wait(ctx); err != nil {
 		return "", fmt.Errorf("rate limit: %w", err)
 	}
 
-	// did:web:example.com -> https://example.com/.well-known/did.json
 	domain := strings.TrimPrefix(did, "did:web:")
 	if domain == "" {
 		return "", fmt.Errorf("empty did:web domain")
 	}
-	// Percent-decode colons for path-based did:web
 	domain = strings.ReplaceAll(domain, ":", "/")
 
 	url := "https://" + domain + "/.well-known/did.json"
@@ -252,7 +240,6 @@ func PreloadPLCState(ctx context.Context, conn driver.Conn, logger *slog.Logger)
 	return result, nil
 }
 
-// VerifyInMemory verifies a batch of repos against a preloaded PLC state map.
 // did:plc repos are checked via map lookup; did:web repos are included as unverified.
 func VerifyInMemory(repos []DiscoveredRepo, plcState map[string]string) []VerifiedRepo {
 	results := make([]VerifiedRepo, 0, len(repos))
@@ -279,7 +266,6 @@ func VerifyInMemory(repos []DiscoveredRepo, plcState map[string]string) []Verifi
 	return results
 }
 
-// normalizePDS normalizes a PDS URL for comparison by stripping trailing slashes.
 func normalizePDS(pds string) string {
 	return strings.TrimRight(pds, "/")
 }

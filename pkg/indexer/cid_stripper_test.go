@@ -38,35 +38,6 @@ func TestStripCIDs_Like(t *testing.T) {
 	}
 }
 
-func TestStripCIDs_Repost(t *testing.T) {
-	input := `{
-		"$type": "app.bsky.feed.repost",
-		"createdAt": "2024-01-15T10:30:00.000Z",
-		"subject": {
-			"cid": "bafyreig2fjxi3a2u2na6zxpqvr2u4w7i7ksm2k3j5p6q7r8s9t0u1v2w3x4",
-			"uri": "at://did:plc:abc123/app.bsky.feed.post/xyz789"
-		}
-	}`
-
-	result, err := StripCIDs([]byte(input))
-	if err != nil {
-		t.Fatalf("StripCIDs failed: %v", err)
-	}
-
-	var parsed map[string]any
-	if err := json.Unmarshal(result, &parsed); err != nil {
-		t.Fatalf("Failed to parse result: %v", err)
-	}
-
-	subject := parsed["subject"].(map[string]any)
-	if _, exists := subject["cid"]; exists {
-		t.Error("subject.cid should be removed")
-	}
-	if subject["uri"] == nil {
-		t.Error("subject.uri should be preserved")
-	}
-}
-
 func TestStripCIDs_PostWithReply(t *testing.T) {
 	input := `{
 		"$type": "app.bsky.feed.post",

@@ -18,7 +18,6 @@ import (
 
 var tracer = otel.Tracer("crawler")
 
-// Config holds all configuration for a crawl run.
 type Config struct {
 	OutputDir     string
 	Workers       int
@@ -38,7 +37,6 @@ type Config struct {
 	Logger         *slog.Logger
 }
 
-// Crawler orchestrates the full network crawl.
 type Crawler struct {
 	config     Config
 	progress   *Progress
@@ -53,7 +51,6 @@ type Crawler struct {
 	wg           sync.WaitGroup
 }
 
-// NewCrawler creates a new Crawler. Call Run() to start.
 func NewCrawler(config Config) (*Crawler, error) {
 	if config.Workers <= 0 {
 		config.Workers = 50
@@ -94,14 +91,12 @@ func NewCrawler(config Config) (*Crawler, error) {
 	return c, nil
 }
 
-// Run starts the crawl. It blocks until the crawl is complete or the context is cancelled.
 func (c *Crawler) Run(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	c.cancel = cancel
 	defer cancel()
 
 	if c.config.Direct {
-		// Direct mode: start CHWriter instead of SegmentWriter.
 		c.chWriter = NewCHWriter(c.config.DirectCHConn, c.crawledQueue, c.logger)
 		c.wg.Add(1)
 		go func() {
@@ -109,7 +104,6 @@ func (c *Crawler) Run(ctx context.Context) error {
 			c.chWriter.Run(ctx)
 		}()
 	} else {
-		// Archive mode: open segment writer.
 		segNum := c.progress.GetSegmentNum()
 		writer, err := repoarchive.NewSegmentWriter(
 			c.config.OutputDir,
@@ -126,7 +120,6 @@ func (c *Crawler) Run(ctx context.Context) error {
 		go c.writerLoop(ctx)
 	}
 
-	// Start dispatcher and workers.
 	c.dispatcher = NewDispatcher(c.config.DefaultPDSRPS, c.logger)
 	workerPool := NewWorkerPool(c.config.Workers, c.repoQueue, c.crawledQueue, c.progress, c.dispatcher, c.config, c.logger)
 	dispatchErr := make(chan error, 1)
@@ -134,7 +127,6 @@ func (c *Crawler) Run(ctx context.Context) error {
 		dispatchErr <- c.dispatcher.Run(ctx, workerPool.WorkQueue())
 	}()
 
-	// Load cursor for resume.
 	cursor := c.progress.GetCursor()
 	if cursor != "" {
 		c.logger.Info("resuming crawl from cursor", "cursor", cursor)
@@ -142,8 +134,6 @@ func (c *Crawler) Run(ctx context.Context) error {
 
 	var totalPages int
 
-	// Page loop: continuously fetch pages and feed to the dispatcher.
-	// The dispatcher runs in its own goroutine and processes work concurrently.
 	for {
 		if ctx.Err() != nil {
 			break
@@ -183,20 +173,17 @@ func (c *Crawler) Run(ctx context.Context) error {
 		c.logger.Info("fetched page from ClickHouse",
 			"cursor", cursor, "dids", pageTotal, "pds_count", len(pdsGroups))
 
-		// Filter already-completed DIDs.
 		filteredCount := c.progress.FilterPage(pdsGroups)
 		if filteredCount > 0 {
 			c.logger.Info("filtered completed DIDs from page", "skipped", filteredCount)
 		}
 
-		// Filter out junk PDS entries and DNS-unresolvable hosts.
 		junkFiltered, dnsFiltered := c.filterJunkPDS(pdsGroups)
 		if junkFiltered > 0 || dnsFiltered > 0 {
 			c.logger.Info("filtered junk/unresolvable PDS entries",
 				"junk_pds", junkFiltered, "dns_failed", dnsFiltered)
 		}
 
-		// Count remaining DIDs after filtering.
 		remaining := 0
 		for _, dids := range pdsGroups {
 			remaining += len(dids)
@@ -208,20 +195,17 @@ func (c *Crawler) Run(ctx context.Context) error {
 			c.dispatcher.Feed(pdsGroups)
 		}
 
-		// Advance cursor.
 		if nextCursor != "" {
 			cursor = nextCursor
 			c.progress.SetCursor(cursor)
 		}
 
-		// End of data: last page was smaller than page size.
 		if pageTotal < c.config.PageSize {
 			c.logger.Info("reached end of DID data", "pages", totalPages)
 			break
 		}
 	}
 
-	// Wait for the dispatcher to drain all remaining work.
 	c.logger.Info("waiting for dispatcher to drain", "remaining", c.dispatcher.Remaining())
 	for c.dispatcher.Remaining() > 0 {
 		select {
@@ -233,15 +217,12 @@ func (c *Crawler) Run(ctx context.Context) error {
 		}
 	}
 
-	// Stop dispatcher and wait for it to return.
 	c.dispatcher.Stop()
 	<-dispatchErr
 
-	// Signal workers to drain.
 	workerPool.Stop()
 
 	if c.config.Direct {
-		// Close crawledQueue to signal CHWriter to finish.
 		close(c.crawledQueue)
 		c.wg.Wait()
 
@@ -251,11 +232,9 @@ func (c *Crawler) Run(ctx context.Context) error {
 			"total_records", c.chWriter.Sent(),
 			"pages", totalPages)
 	} else {
-		// Close repoQueue to signal writer to finish.
 		close(c.repoQueue)
 		c.wg.Wait()
 
-		// Finalize segment.
 		if err := c.writer.Close(); err != nil {
 			return fmt.Errorf("closing segment writer: %w", err)
 		}
@@ -273,7 +252,6 @@ func (c *Crawler) Run(ctx context.Context) error {
 	return nil
 }
 
-// Shutdown gracefully stops the crawl.
 func (c *Crawler) Shutdown() {
 	if c.cancel != nil {
 		c.cancel()
@@ -306,7 +284,6 @@ func (c *Crawler) writerLoop(ctx context.Context) {
 			bytesWrittenTotal.Add(float64(len(sr.BlockData)))
 			repoCompressedBytes.Observe(float64(len(sr.BlockData)))
 
-			// Detect segment finalization.
 			currentSegment := c.writer.SegmentNum()
 			if currentSegment != lastSegment {
 				segmentsFinalizedTotal.Inc()
@@ -320,7 +297,6 @@ func (c *Crawler) writerLoop(ctx context.Context) {
 				"bytes_written", c.writer.BytesWritten(),
 				"segment", c.writer.SegmentNum())
 		case <-ctx.Done():
-			// Drain remaining repos in the channel.
 			for sr := range c.repoQueue {
 				if err := c.writer.WriteSerializedRepo(sr); err != nil {
 					c.logger.Error("failed to write repo during drain", "did", sr.DID, "error", err)
@@ -336,7 +312,6 @@ func (c *Crawler) writerLoop(ctx context.Context) {
 // hostnames don't resolve. It modifies pdsGroups in place and returns the number
 // of PDS entries removed by each filter.
 func (c *Crawler) filterJunkPDS(pdsGroups map[string][]string) (junkCount, dnsCount int) {
-	// First pass: remove obviously junk PDS entries.
 	for pdsURL := range pdsGroups {
 		if isJunkPDS(pdsURL) {
 			junkCount++
@@ -344,7 +319,6 @@ func (c *Crawler) filterJunkPDS(pdsGroups map[string][]string) (junkCount, dnsCo
 		}
 	}
 
-	// Second pass: DNS pre-check remaining non-Bluesky PDS entries.
 	// Skip DNS checks for known-good infrastructure to avoid unnecessary lookups.
 	resolver := &net.Resolver{PreferGo: true}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -360,7 +334,6 @@ func (c *Crawler) filterJunkPDS(pdsGroups map[string][]string) (junkCount, dnsCo
 
 		host := parsed.Hostname()
 
-		// Skip DNS check for known-good infrastructure.
 		if strings.HasSuffix(host, ".host.bsky.network") ||
 			strings.HasSuffix(host, ".bsky.network") {
 			continue
@@ -386,7 +359,6 @@ func isJunkPDS(pdsURL string) bool {
 
 	host := parsed.Hostname()
 
-	// No hostname at all.
 	if host == "" {
 		return true
 	}
@@ -396,12 +368,10 @@ func isJunkPDS(pdsURL string) bool {
 		return true
 	}
 
-	// Localhost.
 	if host == "localhost" || host == "localhost.localdomain" {
 		return true
 	}
 
-	// Known fake/test domains.
 	switch host {
 	case "example.com", "example.test", "example.org", "example.net",
 		"test.com", "uwu":

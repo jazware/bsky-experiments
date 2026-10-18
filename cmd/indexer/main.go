@@ -135,15 +135,12 @@ func main() {
 	}
 }
 
-// Indexer is the main function for the indexer
 func Indexer(cctx *cli.Context) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Create a channel that will be closed when we want to stop the application
 	kill := make(chan struct{})
 
-	// Trap SIGINT to trigger a shutdown
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
 
@@ -159,7 +156,6 @@ func Indexer(cctx *cli.Context) error {
 		return fmt.Errorf("failed to parse ws-url: %+v", err)
 	}
 
-	// Registers a tracer Provider globally if the exporter endpoint is set
 	if os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT") != "" {
 		logger.Info("initializing tracer...")
 		// A trace per firehose event (~350/s, all sub-millisecond) is mostly
@@ -182,17 +178,14 @@ func Indexer(cctx *cli.Context) error {
 		DB:       0,
 	})
 
-	// Enable tracing instrumentation
 	if err := redisotel.InstrumentTracing(redisClient); err != nil {
 		return fmt.Errorf("failed to instrument redis with tracing: %+v", err)
 	}
 
-	// Enable metrics instrumentation
 	if err := redisotel.InstrumentMetrics(redisClient); err != nil {
 		return fmt.Errorf("failed to instrument redis with metrics: %+v", err)
 	}
 
-	// Test the connection to redis
 	_, err = redisClient.Ping(ctx).Result()
 	if err != nil {
 		return fmt.Errorf("failed to ping redis: %+v", err)
@@ -203,7 +196,6 @@ func Indexer(cctx *cli.Context) error {
 		return err
 	}
 
-	// Create a ClickHouse store
 	clickhouseStore, err := store.NewStore(
 		cctx.String("clickhouse-address"),
 		cctx.String("clickhouse-username"),
@@ -243,7 +235,6 @@ func Indexer(cctx *cli.Context) error {
 		})
 	})
 
-	// Start a goroutine to manage the cursor, saving the current cursor every 5 seconds
 	shutdownCursorManager := make(chan struct{})
 	cursorManagerShutdown := make(chan struct{})
 	go func() {
@@ -270,7 +261,6 @@ func Indexer(cctx *cli.Context) error {
 		}
 	}()
 
-	// Start a goroutine to manage the liveness checker
 	shutdownLivenessChecker := make(chan struct{})
 	livenessCheckerShutdown := make(chan struct{})
 	go func() {
@@ -298,7 +288,6 @@ func Indexer(cctx *cli.Context) error {
 		}
 	}()
 
-	// Start PLC exporter if enabled
 	var plcExporter *plc.Exporter
 	shutdownPLCExporter := make(chan struct{})
 	plcExporterShutdown := make(chan struct{})
@@ -327,7 +316,6 @@ func Indexer(cctx *cli.Context) error {
 		logger.Info("PLC exporter started", "host", cctx.String("plc-host"))
 	}
 
-	// Start profile hydrator if enabled
 	var profHydrator *profilehydrator.Hydrator
 	shutdownProfileHydrator := make(chan struct{})
 	profileHydratorShutdown := make(chan struct{})
@@ -422,13 +410,11 @@ func Indexer(cctx *cli.Context) error {
 	close(shutdownLivenessChecker)
 	close(shutdownCursorManager)
 
-	// Shutdown PLC exporter if enabled
 	if plcExporter != nil {
 		close(shutdownPLCExporter)
 		<-plcExporterShutdown
 	}
 
-	// Shutdown profile hydrator if enabled
 	if profHydrator != nil {
 		close(shutdownProfileHydrator)
 		<-profileHydratorShutdown

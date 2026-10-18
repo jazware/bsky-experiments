@@ -49,7 +49,6 @@ func templateDict(pairs ...any) (map[string]any, error) {
 	return d, nil
 }
 
-// RenderHTML renders the card display model to a standalone HTML document
 func RenderHTML(card *Card) (string, error) {
 	var buf bytes.Buffer
 	if err := cardTemplate.Execute(&buf, card); err != nil {

@@ -29,7 +29,6 @@ type NotFoundError struct {
 	error
 }
 
-// NewFeedGenerator returns a new FeedGenerator
 func NewFeedGenerator(
 	ctx context.Context,
 	feedActorDIDString string,

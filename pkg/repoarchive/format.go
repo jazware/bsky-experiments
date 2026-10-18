@@ -11,14 +11,11 @@ const (
 	FileHeaderSize = 64
 	FileFooterSize = 32
 
-	// DefaultSegmentSize is the target segment file size before starting a new one.
 	DefaultSegmentSize = 2 * 1024 * 1024 * 1024 // 2GB
 
-	// DefaultZstdLevel is the default zstd compression level.
 	DefaultZstdLevel = 3
 )
 
-// FileHeader is the 64-byte header at the start of each .rca segment file.
 type FileHeader struct {
 	Magic       [8]byte  // "REPOARCH"
 	Version     uint16   // 1
@@ -29,7 +26,6 @@ type FileHeader struct {
 	Reserved    [32]byte // zero-filled, pads header to exactly 64 bytes
 }
 
-// FileFooter is the 32-byte footer at the end of each .rca segment file.
 type FileFooter struct {
 	IndexOffset int64    // byte offset of index section
 	IndexSize   uint32   // byte size of index section
@@ -39,7 +35,6 @@ type FileFooter struct {
 	Magic       [8]byte  // "REPOARCH"
 }
 
-// IndexEntry is one entry in the per-segment DID index.
 type IndexEntry struct {
 	DID    string
 	Offset int64  // byte offset of the repo block in the segment
@@ -47,7 +42,6 @@ type IndexEntry struct {
 	CRC32  uint32 // CRC32 of the repo block
 }
 
-// RepoHeader contains metadata for a single repo block.
 type RepoHeader struct {
 	TotalBlockSize  uint32 // enables skipping entire repo
 	DID             string
@@ -58,14 +52,12 @@ type RepoHeader struct {
 	CRC32           uint32 // CRC32 of everything after the header
 }
 
-// CollectionTOCEntry describes one collection within a repo block.
 type CollectionTOCEntry struct {
 	Name           string
 	RecordCount    uint32
 	CompressedSize uint32 // byte size of the zstd-compressed data block
 }
 
-// Record is a single record within a collection data block.
 type Record struct {
 	RKey string
 	JSON []byte // CID-stripped JSON
@@ -80,7 +72,6 @@ type SerializedRepo struct {
 	BlockCRC  uint32
 }
 
-// CrawledRepo is the in-memory representation of a crawled repo ready for writing.
 type CrawledRepo struct {
 	DID         string
 	PDS         string

@@ -53,7 +53,6 @@ func StartMetrics(cctx *cli.Context, opts ...MetricsOption) {
 	}
 }
 
-// MetricsOption is a functional option for configuring the Metrics.
 type MetricsOption func(*Metrics)
 
 // WithListenAddr sets the listen address for the metrics server.

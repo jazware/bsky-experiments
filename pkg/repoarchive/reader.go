@@ -17,7 +17,6 @@ var decompressFailTotal = promauto.NewCounter(prometheus.CounterOpts{
 	Help: "Collections skipped due to zstd decompression failure.",
 })
 
-// SegmentReader reads .rca segment files sequentially with optional collection filtering.
 type SegmentReader struct {
 	file      *os.File
 	header    *FileHeader
@@ -29,7 +28,6 @@ type SegmentReader struct {
 	currentRepo *repoIterator
 }
 
-// repoIterator holds state for iterating through one repo block.
 type repoIterator struct {
 	DID             string
 	PDS             string
@@ -46,7 +44,6 @@ type repoIterator struct {
 	currentColl *collectionIterator
 }
 
-// collectionIterator holds state for iterating through one collection's records.
 type collectionIterator struct {
 	Name        string
 	RecordCount uint32
@@ -55,7 +52,6 @@ type collectionIterator struct {
 	recordsRead uint32
 }
 
-// OpenSegment opens an .rca segment file for reading.
 func OpenSegment(path string) (*SegmentReader, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -82,7 +78,6 @@ func OpenSegment(path string) (*SegmentReader, error) {
 	}, nil
 }
 
-// Header returns the file header.
 func (r *SegmentReader) Header() *FileHeader {
 	return r.header
 }
@@ -101,7 +96,6 @@ func (r *SegmentReader) SetCollectionFilter(collections ...string) {
 	}
 }
 
-// Next advances to the next repo block. Returns false at EOF or on error.
 func (r *SegmentReader) Next() bool {
 	if r.header.RepoCount > 0 && r.reposRead >= r.header.RepoCount {
 		return false
@@ -145,7 +139,6 @@ func (r *SegmentReader) Next() bool {
 	if err != nil {
 		return false
 	}
-	// Skip CRC32 field.
 	if _, err := readUint32(br); err != nil {
 		return false
 	}
@@ -171,7 +164,6 @@ func (r *SegmentReader) Next() bool {
 		}
 	}
 
-	// Remaining bytes in blockData are the compressed collection data blocks.
 	dataStartInBlock := len(blockData) - br.Len()
 
 	r.currentRepo = &repoIterator{
@@ -190,17 +182,14 @@ func (r *SegmentReader) Next() bool {
 	return true
 }
 
-// Repo returns the current repo iterator. Only valid after Next() returns true.
 func (r *SegmentReader) Repo() *repoIterator {
 	return r.currentRepo
 }
 
-// ReposRead returns the count of repos read so far.
 func (r *SegmentReader) ReposRead() uint32 {
 	return r.reposRead
 }
 
-// Close closes the segment reader and releases resources.
 func (r *SegmentReader) Close() error {
 	r.decoder.Close()
 	return r.file.Close()
@@ -243,7 +232,6 @@ func (ri *repoIterator) NextCollection() bool {
 	return false
 }
 
-// Collection returns the current collection iterator.
 func (ri *repoIterator) Collection() *collectionIterator {
 	return ri.currentColl
 }
@@ -254,7 +242,6 @@ func (ri *repoIterator) TOC() []CollectionTOCEntry {
 	return ri.toc
 }
 
-// NextRecord advances to the next record in the current collection.
 func (ci *collectionIterator) NextRecord() bool {
 	if ci.recordsRead >= ci.RecordCount {
 		return false
@@ -263,7 +250,6 @@ func (ci *collectionIterator) NextRecord() bool {
 	return true
 }
 
-// Record reads and returns the current record. Call after NextRecord() returns true.
 func (ci *collectionIterator) Record() (*Record, error) {
 	rkey, err := readLenPrefixed(ci.dataReader)
 	if err != nil {

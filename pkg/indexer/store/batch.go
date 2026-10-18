@@ -14,7 +14,6 @@ const (
 	DefaultQueueSize = 100_000
 )
 
-// RecordBatch represents a batch of records to insert into repo_records
 type RecordBatch struct {
 	Repo       string
 	Collection string
@@ -25,7 +24,6 @@ type RecordBatch struct {
 	TimeUS     int64
 }
 
-// FollowBatch represents a batch of follows
 type FollowBatch struct {
 	ActorDID  string
 	TargetDID string
@@ -35,7 +33,6 @@ type FollowBatch struct {
 	TimeUS    int64
 }
 
-// LikeBatch represents a batch of likes
 type LikeBatch struct {
 	ActorDID          string
 	SubjectURI        string
@@ -48,7 +45,6 @@ type LikeBatch struct {
 	TimeUS            int64
 }
 
-// RepostBatch represents a batch of reposts
 type RepostBatch struct {
 	ActorDID          string
 	SubjectURI        string
@@ -61,7 +57,6 @@ type RepostBatch struct {
 	TimeUS            int64
 }
 
-// BlockBatch represents a batch of blocks
 type BlockBatch struct {
 	ActorDID  string
 	TargetDID string
@@ -71,7 +66,6 @@ type BlockBatch struct {
 	TimeUS    int64
 }
 
-// PostBatch represents a batch of posts
 type PostBatch struct {
 	DID              string
 	RKey             string
@@ -86,7 +80,6 @@ type PostBatch struct {
 	TimeUS           int64
 }
 
-// FeedRequestAnalyticsBatch represents a batch of feed request analytics
 type FeedRequestAnalyticsBatch struct {
 	UserDID        string
 	FeedName       string
@@ -96,7 +89,6 @@ type FeedRequestAnalyticsBatch struct {
 	TimeUS         int64
 }
 
-// BatchInserter handles batched inserts to ClickHouse
 type BatchInserter struct {
 	store  *Store
 	logger *slog.Logger
@@ -114,7 +106,6 @@ type BatchInserter struct {
 	cancel context.CancelFunc
 }
 
-// NewBatchInserter creates a new batch inserter
 func NewBatchInserter(store *Store, logger *slog.Logger) *BatchInserter {
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -132,7 +123,6 @@ func NewBatchInserter(store *Store, logger *slog.Logger) *BatchInserter {
 		cancel:         cancel,
 	}
 
-	// Start batch workers
 	bi.wg.Add(7)
 	go bi.recordBatchWorker()
 	go bi.followBatchWorker()
@@ -145,42 +135,34 @@ func NewBatchInserter(store *Store, logger *slog.Logger) *BatchInserter {
 	return bi
 }
 
-// AddRecord adds a record to the batch queue
 func (bi *BatchInserter) AddRecord(record *RecordBatch) {
 	bi.recordQueue <- record
 }
 
-// AddFollow adds a follow to the batch queue
 func (bi *BatchInserter) AddFollow(follow *FollowBatch) {
 	bi.followQueue <- follow
 }
 
-// AddLike adds a like to the batch queue
 func (bi *BatchInserter) AddLike(like *LikeBatch) {
 	bi.likeQueue <- like
 }
 
-// AddRepost adds a repost to the batch queue
 func (bi *BatchInserter) AddRepost(repost *RepostBatch) {
 	bi.repostQueue <- repost
 }
 
-// AddBlock adds a block to the batch queue
 func (bi *BatchInserter) AddBlock(block *BlockBatch) {
 	bi.blockQueue <- block
 }
 
-// AddPost adds a post to the batch queue
 func (bi *BatchInserter) AddPost(post *PostBatch) {
 	bi.postQueue <- post
 }
 
-// AddFeedRequestAnalytics adds a feed request analytics entry to the batch queue
 func (bi *BatchInserter) AddFeedRequestAnalytics(analytics *FeedRequestAnalyticsBatch) {
 	bi.analyticsQueue <- analytics
 }
 
-// recordBatchWorker processes batches of repo_records
 func (bi *BatchInserter) recordBatchWorker() {
 	defer bi.wg.Done()
 
@@ -218,7 +200,6 @@ func (bi *BatchInserter) recordBatchWorker() {
 	}
 }
 
-// followBatchWorker processes batches of follows
 func (bi *BatchInserter) followBatchWorker() {
 	defer bi.wg.Done()
 
@@ -256,7 +237,6 @@ func (bi *BatchInserter) followBatchWorker() {
 	}
 }
 
-// likeBatchWorker processes batches of likes
 func (bi *BatchInserter) likeBatchWorker() {
 	defer bi.wg.Done()
 
@@ -294,7 +274,6 @@ func (bi *BatchInserter) likeBatchWorker() {
 	}
 }
 
-// repostBatchWorker processes batches of reposts
 func (bi *BatchInserter) repostBatchWorker() {
 	defer bi.wg.Done()
 
@@ -332,7 +311,6 @@ func (bi *BatchInserter) repostBatchWorker() {
 	}
 }
 
-// blockBatchWorker processes batches of blocks
 func (bi *BatchInserter) blockBatchWorker() {
 	defer bi.wg.Done()
 
@@ -370,7 +348,6 @@ func (bi *BatchInserter) blockBatchWorker() {
 	}
 }
 
-// insertRecordBatch inserts a batch of records into repo_records table
 func (bi *BatchInserter) insertRecordBatch(ctx context.Context, batch []*RecordBatch) (err error) {
 	if len(batch) == 0 {
 		return nil
@@ -401,7 +378,6 @@ func (bi *BatchInserter) insertRecordBatch(ctx context.Context, batch []*RecordB
 	return batchInsert.Send()
 }
 
-// insertFollowBatch inserts a batch of follows
 func (bi *BatchInserter) insertFollowBatch(ctx context.Context, batch []*FollowBatch) (err error) {
 	if len(batch) == 0 {
 		return nil
@@ -431,7 +407,6 @@ func (bi *BatchInserter) insertFollowBatch(ctx context.Context, batch []*FollowB
 	return batchInsert.Send()
 }
 
-// insertLikeBatch inserts a batch of likes
 func (bi *BatchInserter) insertLikeBatch(ctx context.Context, batch []*LikeBatch) (err error) {
 	if len(batch) == 0 {
 		return nil
@@ -464,7 +439,6 @@ func (bi *BatchInserter) insertLikeBatch(ctx context.Context, batch []*LikeBatch
 	return batchInsert.Send()
 }
 
-// insertRepostBatch inserts a batch of reposts
 func (bi *BatchInserter) insertRepostBatch(ctx context.Context, batch []*RepostBatch) (err error) {
 	if len(batch) == 0 {
 		return nil
@@ -497,7 +471,6 @@ func (bi *BatchInserter) insertRepostBatch(ctx context.Context, batch []*RepostB
 	return batchInsert.Send()
 }
 
-// insertBlockBatch inserts a batch of blocks
 func (bi *BatchInserter) insertBlockBatch(ctx context.Context, batch []*BlockBatch) (err error) {
 	if len(batch) == 0 {
 		return nil
@@ -527,7 +500,6 @@ func (bi *BatchInserter) insertBlockBatch(ctx context.Context, batch []*BlockBat
 	return batchInsert.Send()
 }
 
-// postBatchWorker processes batches of posts
 func (bi *BatchInserter) postBatchWorker() {
 	defer bi.wg.Done()
 
@@ -565,7 +537,6 @@ func (bi *BatchInserter) postBatchWorker() {
 	}
 }
 
-// insertPostBatch inserts a batch of posts
 func (bi *BatchInserter) insertPostBatch(ctx context.Context, batch []*PostBatch) (err error) {
 	if len(batch) == 0 {
 		return nil
@@ -600,7 +571,6 @@ func (bi *BatchInserter) insertPostBatch(ctx context.Context, batch []*PostBatch
 	return batchInsert.Send()
 }
 
-// analyticsBatchWorker processes batches of feed request analytics
 func (bi *BatchInserter) analyticsBatchWorker() {
 	defer bi.wg.Done()
 
@@ -638,7 +608,6 @@ func (bi *BatchInserter) analyticsBatchWorker() {
 	}
 }
 
-// insertAnalyticsBatch inserts a batch of feed request analytics
 func (bi *BatchInserter) insertAnalyticsBatch(ctx context.Context, batch []*FeedRequestAnalyticsBatch) (err error) {
 	if len(batch) == 0 {
 		return nil
@@ -668,7 +637,6 @@ func (bi *BatchInserter) insertAnalyticsBatch(ctx context.Context, batch []*Feed
 	return batchInsert.Send()
 }
 
-// Shutdown gracefully shuts down the batch inserter
 func (bi *BatchInserter) Shutdown() {
 	bi.cancel()
 	bi.wg.Wait()

@@ -34,7 +34,6 @@ const (
 // https://cdn.bsky.app/img/avatar/plain/did:plc:xxx/bafkreiabc@jpeg
 var cdnCIDRegex = regexp.MustCompile(`/plain/[^/]+/([^@]+)@`)
 
-// HydratorConfig contains configuration for the profile hydrator
 type HydratorConfig struct {
 	APIHost     string
 	RateLimit   float64
@@ -45,7 +44,6 @@ type HydratorConfig struct {
 	Logger      *slog.Logger
 }
 
-// Hydrator handles fetching profiles from the Bluesky API and storing them
 type Hydrator struct {
 	config        HydratorConfig
 	httpClient    *http.Client
@@ -64,7 +62,6 @@ type Hydrator struct {
 	wg     sync.WaitGroup
 }
 
-// APIProfile represents a profile from the Bluesky API response
 type APIProfile struct {
 	DID            string     `json:"did"`
 	Handle         string     `json:"handle"`
@@ -79,23 +76,19 @@ type APIProfile struct {
 	CreatedAt      string     `json:"createdAt"`
 }
 
-// APILabel represents a label in the API response
 type APILabel struct {
 	Val string `json:"val"`
 }
 
-// GetProfilesResponse represents the API response
 type GetProfilesResponse struct {
 	Profiles []APIProfile `json:"profiles"`
 }
 
-// DIDWithTimeUS represents a DID with its max time_us for cursor tracking
 type DIDWithTimeUS struct {
 	DID    string
 	TimeUS int64
 }
 
-// NewHydrator creates a new profile hydrator
 func NewHydrator(config HydratorConfig) (*Hydrator, error) {
 	if config.RateLimit <= 0 {
 		config.RateLimit = DefaultRateLimit
@@ -119,7 +112,6 @@ func NewHydrator(config HydratorConfig) (*Hydrator, error) {
 		cancel:                 cancel,
 	}
 
-	// Load cursors from Redis
 	if err := h.loadCursors(ctx); err != nil {
 		config.Logger.Warn("failed to load profile hydrator cursors from Redis, starting from beginning", "error", err)
 	}
@@ -127,7 +119,6 @@ func NewHydrator(config HydratorConfig) (*Hydrator, error) {
 	return h, nil
 }
 
-// Run starts the hydrator main loop
 func (h *Hydrator) Run() {
 	h.wg.Add(1)
 	defer h.wg.Done()
@@ -150,14 +141,12 @@ func (h *Hydrator) Run() {
 		default:
 		}
 
-		// Fetch and process a batch of DIDs
 		count, err := h.processBatch(h.ctx)
 		if err != nil {
 			consecutiveErrors++
 			fetchErrorsCounter.Inc()
 			logger.Error("failed to process profile batch", "error", err, "consecutive_errors", consecutiveErrors)
 
-			// Exponential backoff
 			if consecutiveErrors >= MaxRetries {
 				logger.Error("max retries exceeded, backing off", "backoff", backoff)
 				select {
@@ -170,11 +159,9 @@ func (h *Hydrator) Run() {
 			continue
 		}
 
-		// Reset backoff on success
 		consecutiveErrors = 0
 		backoff = InitialBackoff
 
-		// If we got no DIDs, we're caught up - wait before polling again
 		if count == 0 {
 			logger.Debug("caught up with DIDs, waiting before next poll")
 			select {
@@ -192,12 +179,10 @@ func (h *Hydrator) Run() {
 	}
 }
 
-// processBatch fetches DIDs from both sources, dedupes, and hydrates profiles
 func (h *Hydrator) processBatch(ctx context.Context) (int, error) {
 	ctx, span := tracer.Start(ctx, "processBatch")
 	defer span.End()
 
-	// Fetch DIDs from both sources
 	repoDIDs, err := h.fetchDIDsFromRepoRecords(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("failed to fetch DIDs from repo_records: %w", err)
@@ -208,7 +193,6 @@ func (h *Hydrator) processBatch(ctx context.Context) (int, error) {
 		return 0, fmt.Errorf("failed to fetch DIDs from plc_operations: %w", err)
 	}
 
-	// Merge and dedupe DIDs
 	didMap := make(map[string]int64)
 	var maxRepoTimeUS, maxPLCTimeUS int64
 
@@ -232,7 +216,6 @@ func (h *Hydrator) processBatch(ctx context.Context) (int, error) {
 		return 0, nil
 	}
 
-	// Convert map to slice
 	dids := make([]string, 0, len(didMap))
 	for did := range didMap {
 		dids = append(dids, did)
@@ -240,13 +223,11 @@ func (h *Hydrator) processBatch(ctx context.Context) (int, error) {
 
 	didsQueuedCounter.Add(float64(len(dids)))
 
-	// Fetch profiles in batches of BatchSize
 	totalFetched := 0
 	for i := 0; i < len(dids); i += h.config.BatchSize {
 		end := min(i+h.config.BatchSize, len(dids))
 		batch := dids[i:end]
 
-		// Rate limit
 		if err := h.rateLimiter.Wait(ctx); err != nil {
 			if ctx.Err() != nil {
 				return totalFetched, nil
@@ -261,14 +242,12 @@ func (h *Hydrator) processBatch(ctx context.Context) (int, error) {
 			continue
 		}
 
-		// Add profiles to batch inserter
 		for _, profile := range profiles {
 			h.batchInserter.Add(profile)
 		}
 		totalFetched += len(profiles)
 	}
 
-	// Update cursors
 	if maxRepoTimeUS > 0 {
 		h.setRepoRecordsCursor(maxRepoTimeUS)
 		repoRecordsCursorGauge.Set(float64(maxRepoTimeUS))
@@ -278,7 +257,6 @@ func (h *Hydrator) processBatch(ctx context.Context) (int, error) {
 		plcOperationsCursorGauge.Set(float64(maxPLCTimeUS))
 	}
 
-	// Save cursors to Redis
 	if err := h.saveCursors(ctx); err != nil {
 		h.config.Logger.Error("failed to save profile hydrator cursors to Redis", "error", err)
 	}
@@ -286,7 +264,6 @@ func (h *Hydrator) processBatch(ctx context.Context) (int, error) {
 	return totalFetched, nil
 }
 
-// fetchDIDsFromRepoRecords fetches DIDs from repo_records that don't have profiles yet
 func (h *Hydrator) fetchDIDsFromRepoRecords(ctx context.Context) ([]DIDWithTimeUS, error) {
 	cursor := h.getRepoRecordsCursor()
 
@@ -318,7 +295,6 @@ func (h *Hydrator) fetchDIDsFromRepoRecords(ctx context.Context) ([]DIDWithTimeU
 	return result, nil
 }
 
-// fetchDIDsFromPLCOperations fetches DIDs from plc_operations that don't have profiles yet
 func (h *Hydrator) fetchDIDsFromPLCOperations(ctx context.Context) ([]DIDWithTimeUS, error) {
 	cursor := h.getPLCOperationsCursor()
 
@@ -350,7 +326,6 @@ func (h *Hydrator) fetchDIDsFromPLCOperations(ctx context.Context) ([]DIDWithTim
 	return result, nil
 }
 
-// fetchProfiles fetches profiles from the Bluesky API
 func (h *Hydrator) fetchProfiles(ctx context.Context, dids []string) ([]*ProfileBatch, error) {
 	ctx, span := tracer.Start(ctx, "fetchProfiles")
 	defer span.End()
@@ -359,7 +334,6 @@ func (h *Hydrator) fetchProfiles(ctx context.Context, dids []string) ([]*Profile
 		return nil, nil
 	}
 
-	// Build query parameters
 	params := make([]string, len(dids))
 	for i, did := range dids {
 		params[i] = "actors=" + did
@@ -403,7 +377,6 @@ func (h *Hydrator) fetchProfiles(ctx context.Context, dids []string) ([]*Profile
 		return nil, fmt.Errorf("failed to parse response: %w", err)
 	}
 
-	// Convert API profiles to batch profiles
 	now := time.Now()
 	result := make([]*ProfileBatch, 0, len(apiResp.Profiles))
 
@@ -413,7 +386,6 @@ func (h *Hydrator) fetchProfiles(ctx context.Context, dids []string) ([]*Profile
 			createdAt = now
 		}
 
-		// Marshal the individual profile to JSON for storage
 		profileJSON, err := json.Marshal(p)
 		if err != nil {
 			h.config.Logger.Warn("failed to marshal profile JSON", "did", p.DID, "error", err)
@@ -435,7 +407,6 @@ func (h *Hydrator) fetchProfiles(ctx context.Context, dids []string) ([]*Profile
 		profilesFetchedCounter.WithLabelValues("success").Inc()
 	}
 
-	// Count DIDs that weren't found
 	foundDIDs := make(map[string]bool)
 	for _, p := range apiResp.Profiles {
 		foundDIDs[p.DID] = true
@@ -462,8 +433,6 @@ func extractCIDFromURL(url string) string {
 	return ""
 }
 
-// Cursor getters/setters
-
 func (h *Hydrator) getRepoRecordsCursor() int64 {
 	h.cursorMu.RLock()
 	defer h.cursorMu.RUnlock()
@@ -488,9 +457,7 @@ func (h *Hydrator) setPLCOperationsCursor(cursor int64) {
 	h.plcOperationsCursor = cursor
 }
 
-// loadCursors loads both cursors from Redis
 func (h *Hydrator) loadCursors(ctx context.Context) error {
-	// Load repo_records cursor
 	repoCursor, err := h.config.RedisClient.Get(ctx, h.repoRecordsCursorKey).Result()
 	if err != nil && err != redis.Nil {
 		return fmt.Errorf("failed to get repo cursor from Redis: %w", err)
@@ -502,7 +469,6 @@ func (h *Hydrator) loadCursors(ctx context.Context) error {
 		}
 	}
 
-	// Load plc_operations cursor
 	plcCursor, err := h.config.RedisClient.Get(ctx, h.plcOperationsCursorKey).Result()
 	if err != nil && err != redis.Nil {
 		return fmt.Errorf("failed to get plc cursor from Redis: %w", err)
@@ -517,7 +483,6 @@ func (h *Hydrator) loadCursors(ctx context.Context) error {
 	return nil
 }
 
-// saveCursors saves both cursors to Redis
 func (h *Hydrator) saveCursors(ctx context.Context) error {
 	repoCursor := h.getRepoRecordsCursor()
 	if repoCursor > 0 {
@@ -536,20 +501,15 @@ func (h *Hydrator) saveCursors(ctx context.Context) error {
 	return nil
 }
 
-// Shutdown gracefully shuts down the hydrator
 func (h *Hydrator) Shutdown() {
 	h.config.Logger.Info("shutting down profile hydrator")
 
-	// Cancel context to stop main loop
 	h.cancel()
 
-	// Wait for main loop to finish
 	h.wg.Wait()
 
-	// Shutdown batch inserter (flushes remaining batches)
 	h.batchInserter.Shutdown()
 
-	// Save final cursors
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := h.saveCursors(ctx); err != nil {

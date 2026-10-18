@@ -26,7 +26,6 @@ func (api *API) RedirectAtURI(c echo.Context) error {
 	query := req.Q
 
 	if strings.HasPrefix(query, "https://") {
-		// Turn the bsky URL into an atURI
 		u, err := url.Parse(query)
 		if err != nil {
 			return c.JSON(http.StatusBadRequest, map[string]string{"error": fmt.Errorf("failed to parse url: %w", err).Error()})

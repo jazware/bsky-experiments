@@ -66,7 +66,6 @@ func (t *cborTranscoder) readBytes(n uint64) ([]byte, error) {
 	return b, nil
 }
 
-// readArg reads the CBOR additional information argument.
 func (t *cborTranscoder) readArg(ai byte) (uint64, error) {
 	if ai < 24 {
 		return uint64(ai), nil
@@ -248,7 +247,6 @@ func (t *cborTranscoder) transcodeValue() error {
 	return nil
 }
 
-// readTextString reads a CBOR text string (major type 3) and returns the raw bytes.
 func (t *cborTranscoder) readTextString() ([]byte, error) {
 	ib, err := t.readByte()
 	if err != nil {
@@ -305,7 +303,6 @@ func (t *cborTranscoder) transcodeCIDLink() error {
 	return nil
 }
 
-// skipValue skips a CBOR value without producing output.
 func (t *cborTranscoder) skipValue() error {
 	ib, err := t.readByte()
 	if err != nil {
@@ -379,7 +376,6 @@ func (t *cborTranscoder) skipValue() error {
 	return fmt.Errorf("unsupported CBOR major type in skip: %d", major)
 }
 
-// writeJSONString writes a JSON-escaped string to the output buffer.
 func (t *cborTranscoder) writeJSONString(s []byte) {
 	t.out = append(t.out, '"')
 	for i := 0; i < len(s); {

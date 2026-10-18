@@ -12,7 +12,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-// PrepareConfig holds configuration for the prepare step.
 type PrepareConfig struct {
 	DiscoveryConfig
 	ClickHouseConn driver.Conn
@@ -22,14 +21,10 @@ type PrepareConfig struct {
 }
 
 const (
-	// Number of parallel consumer goroutines for verification + insertion.
 	prepareConsumers = 4
-	// Rows to accumulate per consumer before flushing to ClickHouse.
 	prepareFlushSize = 50000
 )
 
-// RunPrepare discovers PDSs from the relay, enumerates repos, verifies PDS
-// claims, and writes the results to the crawl_repos table in ClickHouse.
 func RunPrepare(ctx context.Context, config PrepareConfig) error {
 	logger := config.Logger
 	timer := prometheus.NewTimer(prepareDurationSeconds)
@@ -48,7 +43,6 @@ func RunPrepare(ctx context.Context, config PrepareConfig) error {
 
 	discoverer := NewDiscoverer(config.DiscoveryConfig)
 
-	// Step 1: Discover hosts from relay.
 	logger.Info("discovering hosts from relay", "relay", config.RelayHost)
 	hosts, err := discoverer.ListHosts(ctx)
 	if err != nil {
@@ -60,7 +54,6 @@ func RunPrepare(ctx context.Context, config PrepareConfig) error {
 		return fmt.Errorf("no hosts found from relay")
 	}
 
-	// Set expected repos gauge from relay AccountCounts.
 	var expectedRepos int64
 	for _, h := range hosts {
 		expectedRepos += h.AccountCount
@@ -68,19 +61,16 @@ func RunPrepare(ctx context.Context, config PrepareConfig) error {
 	prepareExpectedRepos.Set(float64(expectedRepos))
 	logger.Info("expected repos from relay", "expected", expectedRepos)
 
-	// Log top hosts for visibility.
 	limit := min(10, len(hosts))
 	for _, h := range hosts[:limit] {
 		logger.Info("top host", "hostname", h.Hostname, "accounts", h.AccountCount)
 	}
 
-	// Step 2: Truncate crawl_repos table.
 	logger.Info("truncating crawl_repos table")
 	if err := config.ClickHouseConn.Exec(ctx, "TRUNCATE TABLE crawl_repos"); err != nil {
 		return fmt.Errorf("truncating crawl_repos: %w", err)
 	}
 
-	// Step 3: Enumerate repos and insert into ClickHouse with parallel consumers.
 	repoCh := make(chan []DiscoveredRepo, config.DiscoveryConfig.Workers*2)
 
 	enumDone := make(chan error, 1)
@@ -95,8 +85,6 @@ func RunPrepare(ctx context.Context, config PrepareConfig) error {
 		inserted   atomic.Int64
 	}
 
-	// Launch parallel consumers that each read batches from repoCh,
-	// verify in-memory, accumulate locally, and flush large batches.
 	var consumerWg sync.WaitGroup
 	for range prepareConsumers {
 		consumerWg.Add(1)
@@ -143,7 +131,6 @@ func RunPrepare(ctx context.Context, config PrepareConfig) error {
 				}
 			}
 
-			// Flush remaining.
 			if len(localBatch) > 0 {
 				if err := insertCrawlRepos(ctx, config.ClickHouseConn, localBatch); err != nil {
 					logger.Error("failed to flush crawl_repos", "error", err)
@@ -157,7 +144,6 @@ func RunPrepare(ctx context.Context, config PrepareConfig) error {
 
 	consumerWg.Wait()
 
-	// Wait for enumeration to finish.
 	if err := <-enumDone; err != nil {
 		return fmt.Errorf("enumerating repos: %w", err)
 	}
@@ -171,7 +157,6 @@ func RunPrepare(ctx context.Context, config PrepareConfig) error {
 	return nil
 }
 
-// insertCrawlRepos batch-inserts verified repos into the crawl_repos table.
 func insertCrawlRepos(ctx context.Context, conn driver.Conn, repos []VerifiedRepo) error {
 	batch, err := conn.PrepareBatch(ctx,
 		"INSERT INTO crawl_repos (did, pds, head, rev, active, status, verified, time_us)")

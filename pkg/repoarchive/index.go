@@ -8,13 +8,11 @@ import (
 	"sort"
 )
 
-// Index is an in-memory sorted index for a single .rca segment,
 // supporting binary search by DID for random access.
 type Index struct {
 	Entries []IndexEntry
 }
 
-// LoadIndex reads the index section from a segment file.
 // It reads the footer to locate the index, then reads and parses the index entries.
 func LoadIndex(path string) (*Index, error) {
 	f, err := os.Open(path)
@@ -23,7 +21,6 @@ func LoadIndex(path string) (*Index, error) {
 	}
 	defer f.Close()
 
-	// Read footer from end of file.
 	fi, err := f.Stat()
 	if err != nil {
 		return nil, fmt.Errorf("stat: %w", err)
@@ -40,7 +37,6 @@ func LoadIndex(path string) (*Index, error) {
 		return nil, fmt.Errorf("reading footer: %w", err)
 	}
 
-	// Read the index section.
 	if _, err := f.Seek(footer.IndexOffset, io.SeekStart); err != nil {
 		return nil, fmt.Errorf("seeking to index: %w", err)
 	}
@@ -49,12 +45,10 @@ func LoadIndex(path string) (*Index, error) {
 		return nil, fmt.Errorf("reading index data: %w", err)
 	}
 
-	// Verify CRC.
 	if checksumCRC32(indexData) != footer.CRC32 {
 		return nil, fmt.Errorf("index CRC32 mismatch")
 	}
 
-	// Parse index entries.
 	br := bytes.NewReader(indexData)
 	count, err := readUint32(br)
 	if err != nil {
@@ -90,7 +84,6 @@ func LoadIndex(path string) (*Index, error) {
 	return &Index{Entries: entries}, nil
 }
 
-// FindDID performs a binary search for the given DID.
 // Returns the IndexEntry and true if found, or a zero-value entry and false.
 func (idx *Index) FindDID(did string) (IndexEntry, bool) {
 	i := sort.Search(len(idx.Entries), func(i int) bool {
@@ -102,7 +95,6 @@ func (idx *Index) FindDID(did string) (IndexEntry, bool) {
 	return IndexEntry{}, false
 }
 
-// DIDs returns all DIDs in the index (sorted).
 func (idx *Index) DIDs() []string {
 	dids := make([]string, len(idx.Entries))
 	for i, e := range idx.Entries {

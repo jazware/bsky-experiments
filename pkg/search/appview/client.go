@@ -73,12 +73,10 @@ func NewClient(logger *slog.Logger, pdsHost, identifier, password string, cache 
 	}
 }
 
-// Authenticated reports whether the client has credentials configured
 func (c *Client) Authenticated() bool {
 	return c.identifier != ""
 }
 
-// ensureSession makes sure we hold a valid access token (no-op when unauthenticated)
 func (c *Client) ensureSession(ctx context.Context) error {
 	if !c.Authenticated() {
 		return nil
@@ -115,7 +113,6 @@ func (c *Client) createSession(ctx context.Context) error {
 	return nil
 }
 
-// refreshSession refreshes the access token, falling back to a fresh login
 func (c *Client) refreshSession(ctx context.Context) error {
 	c.authLk.Lock()
 	defer c.authLk.Unlock()
@@ -147,7 +144,6 @@ func (c *Client) refreshSession(ctx context.Context) error {
 	return nil
 }
 
-// isAuthError reports whether the error is an expired/invalid token error
 func isAuthError(err error) bool {
 	var xerr *xrpc.Error
 	if !errors.As(err, &xerr) {
@@ -166,7 +162,6 @@ func isAuthError(err error) bool {
 	return strings.Contains(err.Error(), "ExpiredToken")
 }
 
-// do runs an XRPC call, refreshing the session and retrying once on auth errors
 func (c *Client) do(ctx context.Context, call func() error) error {
 	if err := c.ensureSession(ctx); err != nil {
 		return err
@@ -182,7 +177,6 @@ func (c *Client) do(ctx context.Context, call func() error) error {
 	return err
 }
 
-// GetPostThread fetches a post and one level of replies by AT-URI
 func (c *Client) GetPostThread(ctx context.Context, atURI string) (*bsky.FeedDefs_ThreadViewPost, error) {
 	ctx, span := tracer.Start(ctx, "GetPostThread")
 	defer span.End()
@@ -216,7 +210,6 @@ func (c *Client) GetPostThread(ctx context.Context, atURI string) (*bsky.FeedDef
 	return out.Thread.FeedDefs_ThreadViewPost, nil
 }
 
-// GetProfile fetches a profile by handle or DID
 func (c *Client) GetProfile(ctx context.Context, actor string) (*bsky.ActorDefs_ProfileViewDetailed, error) {
 	ctx, span := tracer.Start(ctx, "GetProfile")
 	defer span.End()

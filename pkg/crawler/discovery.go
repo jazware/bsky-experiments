@@ -16,7 +16,6 @@ import (
 	"golang.org/x/time/rate"
 )
 
-// DiscoveryConfig controls relay-based PDS and repo discovery.
 type DiscoveryConfig struct {
 	RelayHost      string
 	Workers        int
@@ -27,14 +26,12 @@ type DiscoveryConfig struct {
 	Logger         *slog.Logger
 }
 
-// HostInfo represents a PDS discovered from the relay.
 type HostInfo struct {
 	Hostname     string
 	AccountCount int64
 	URL          string
 }
 
-// DiscoveredRepo represents a repo found on a PDS via listRepos.
 type DiscoveredRepo struct {
 	DID    string
 	PDS    string
@@ -44,13 +41,11 @@ type DiscoveredRepo struct {
 	Status string
 }
 
-// Discoverer finds PDSs and enumerates repos from a relay.
 type Discoverer struct {
 	config DiscoveryConfig
 	logger *slog.Logger
 }
 
-// NewDiscoverer creates a new Discoverer.
 func NewDiscoverer(config DiscoveryConfig) *Discoverer {
 	if config.Workers <= 0 {
 		config.Workers = 10
@@ -244,7 +239,6 @@ func (d *Discoverer) enumeratePDS(ctx context.Context, host HostInfo, output cha
 				status = *repo.Status
 			}
 
-			// Skip permanently inactive repos.
 			if !active && isPermanentStatus(status) {
 				continue
 			}
@@ -277,8 +271,6 @@ func (d *Discoverer) enumeratePDS(ctx context.Context, host HostInfo, output cha
 	return total, nil
 }
 
-// isPermanentStatus returns true for repo statuses that indicate the account
-// is permanently unavailable.
 func isPermanentStatus(status string) bool {
 	switch status {
 	case "takendown", "suspended", "deleted":

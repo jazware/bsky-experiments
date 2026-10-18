@@ -16,13 +16,11 @@ import (
 
 const pdsBlockThreshold = 10
 
-// CrawlTask is a unit of work dispatched to a worker.
 type CrawlTask struct {
 	DID string
 	PDS string
 }
 
-// PDSState tracks rate limiting and remaining work for a single PDS.
 type PDSState struct {
 	URL     string
 	Limiter *rate.Limiter
@@ -32,7 +30,6 @@ type PDSState struct {
 	Blocked bool // true when PDS is unreachable
 }
 
-// pdsReport is sent by workers to report PDS health.
 type pdsReport struct {
 	PDS     string
 	Success bool
@@ -53,7 +50,6 @@ type Dispatcher struct {
 	logger     *slog.Logger
 }
 
-// NewDispatcher creates a new dispatcher.
 func NewDispatcher(defaultRPS float64, logger *slog.Logger) *Dispatcher {
 	return &Dispatcher{
 		pdsIndex:   make(map[string]*PDSState),
@@ -71,17 +67,14 @@ func (d *Dispatcher) Feed(pdsGroups map[string][]string) {
 	d.feedCh <- pdsGroups
 }
 
-// Stop signals the dispatcher to finish and return from Run().
 func (d *Dispatcher) Stop() {
 	close(d.done)
 }
 
-// Remaining returns the number of DIDs not yet dispatched.
 func (d *Dispatcher) Remaining() int64 {
 	return d.remaining.Load()
 }
 
-// ActivePDSCount returns the number of PDSs with remaining undispatched work.
 func (d *Dispatcher) ActivePDSCount() int32 {
 	return d.activePDS.Load()
 }
@@ -105,11 +98,9 @@ func (d *Dispatcher) Run(ctx context.Context, workQueue chan<- *CrawlTask) error
 	defer snapshotTicker.Stop()
 
 	for {
-		// Ingest any pending pages and process worker reports (non-blocking).
 		d.drain(&active)
 		d.processReports(&active)
 
-		// Periodic queue snapshot.
 		select {
 		case <-snapshotTicker.C:
 			d.emitQueueSnapshot(ctx, active)
@@ -130,7 +121,6 @@ func (d *Dispatcher) Run(ctx context.Context, workQueue chan<- *CrawlTask) error
 			}
 		}
 
-		// Dispatch one round across active PDSs.
 		roundDispatched := false
 		i := 0
 		for i < len(active) {
@@ -192,7 +182,6 @@ func (d *Dispatcher) Run(ctx context.Context, workQueue chan<- *CrawlTask) error
 	}
 }
 
-// processReports drains all pending reports from the report channel.
 func (d *Dispatcher) processReports(active *[]*PDSState) {
 	for {
 		select {
@@ -204,7 +193,6 @@ func (d *Dispatcher) processReports(active *[]*PDSState) {
 	}
 }
 
-// handleReport processes a single PDS success/failure report.
 func (d *Dispatcher) handleReport(report pdsReport, _ *[]*PDSState) {
 	pds, ok := d.pdsIndex[report.PDS]
 	if !ok {
@@ -235,7 +223,6 @@ func (d *Dispatcher) handleReport(report pdsReport, _ *[]*PDSState) {
 	}
 }
 
-// skipBlockedPDS removes a blocked PDS's remaining work from the dispatch queue.
 func (d *Dispatcher) skipBlockedPDS(pds *PDSState) {
 	remaining := len(pds.DIDs) - pds.Cursor
 	if remaining > 0 {
@@ -263,7 +250,6 @@ func pdsRate(pdsURL string, didCount int, defaultRPS float64) float64 {
 	}
 }
 
-// drain non-blocking ingests all pending pages from feedCh.
 func (d *Dispatcher) drain(active *[]*PDSState) {
 	for {
 		select {
@@ -275,7 +261,6 @@ func (d *Dispatcher) drain(active *[]*PDSState) {
 	}
 }
 
-// pdsQueueEntry is used for sorting PDS entries by remaining DID count.
 type pdsQueueEntry struct {
 	URL       string
 	Remaining int
@@ -284,12 +269,10 @@ type pdsQueueEntry struct {
 	RPS       float64
 }
 
-// emitQueueSnapshot creates a span with the top PDS entries by queue depth.
 func (d *Dispatcher) emitQueueSnapshot(ctx context.Context, active []*PDSState) {
 	_, span := tracer.Start(ctx, "dispatcher.queueSnapshot")
 	defer span.End()
 
-	// Build sorted list of active PDS entries by remaining count.
 	entries := make([]pdsQueueEntry, 0, len(active))
 	for _, pds := range active {
 		remaining := len(pds.DIDs) - pds.Cursor
@@ -314,7 +297,6 @@ func (d *Dispatcher) emitQueueSnapshot(ctx context.Context, active []*PDSState) 
 		attribute.Int("queue.active_pds", len(entries)),
 	)
 
-	// Emit top 50 PDS entries as span attributes.
 	limit := min(len(entries), 50)
 	for i, e := range entries[:limit] {
 		prefix := fmt.Sprintf("queue.pds.%d", i)
@@ -328,13 +310,11 @@ func (d *Dispatcher) emitQueueSnapshot(ctx context.Context, active []*PDSState) 
 	}
 }
 
-// ingest adds a page of work to the dispatcher state.
 func (d *Dispatcher) ingest(groups map[string][]string, active *[]*PDSState) {
 	newDIDs := 0
 	for pdsURL, dids := range groups {
 		if existing, ok := d.pdsIndex[pdsURL]; ok {
 			if existing.Blocked {
-				// PDS is blocked, skip new DIDs for it.
 				d.logger.Debug("skipping new DIDs for blocked PDS",
 					"pds", pdsURL, "count", len(dids))
 				continue

@@ -16,7 +16,6 @@ const (
 	DefaultQueueSize = 10_000
 )
 
-// ProfileBatch represents a profile to be inserted into ClickHouse
 type ProfileBatch struct {
 	DID         string
 	Handle      string
@@ -29,7 +28,6 @@ type ProfileBatch struct {
 	TimeUS      int64
 }
 
-// BatchInserter handles batched inserts of profiles to ClickHouse
 type BatchInserter struct {
 	db     driver.Conn
 	logger *slog.Logger
@@ -41,7 +39,6 @@ type BatchInserter struct {
 	cancel context.CancelFunc
 }
 
-// NewBatchInserter creates a new profile batch inserter
 func NewBatchInserter(db driver.Conn, logger *slog.Logger) *BatchInserter {
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -53,19 +50,16 @@ func NewBatchInserter(db driver.Conn, logger *slog.Logger) *BatchInserter {
 		cancel: cancel,
 	}
 
-	// Start batch worker
 	bi.wg.Add(1)
 	go bi.batchWorker()
 
 	return bi
 }
 
-// Add adds a profile to the batch queue
 func (bi *BatchInserter) Add(profile *ProfileBatch) {
 	bi.queue <- profile
 }
 
-// batchWorker processes batches of profiles
 func (bi *BatchInserter) batchWorker() {
 	defer bi.wg.Done()
 
@@ -105,7 +99,6 @@ func (bi *BatchInserter) batchWorker() {
 	}
 }
 
-// insertBatch inserts a batch of profiles into the profiles table
 func (bi *BatchInserter) insertBatch(ctx context.Context, batch []*ProfileBatch) error {
 	if len(batch) == 0 {
 		return nil
@@ -142,13 +135,11 @@ func (bi *BatchInserter) insertBatch(ctx context.Context, batch []*ProfileBatch)
 	return nil
 }
 
-// Shutdown gracefully shuts down the batch inserter
 func (bi *BatchInserter) Shutdown() {
 	bi.cancel()
 	bi.wg.Wait()
 }
 
-// QueueLen returns the current queue length
 func (bi *BatchInserter) QueueLen() int {
 	return len(bi.queue)
 }

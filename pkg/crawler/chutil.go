@@ -11,7 +11,6 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 )
 
-// SetupBulkClickHouse creates a ClickHouse connection optimized for bulk inserts.
 func SetupBulkClickHouse(address, username, password string) (driver.Conn, error) {
 	opts := &clickhouse.Options{
 		Addr: []string{address},
@@ -63,7 +62,6 @@ func killStuckQueries(ctx context.Context, conn driver.Conn, logger *slog.Logger
 	time.Sleep(2 * time.Second)
 }
 
-// execWithRetry executes a statement, retrying on lock timeout errors (code 473).
 func execWithRetry(ctx context.Context, conn driver.Conn, stmt string, logger *slog.Logger) error {
 	const maxRetries = 3
 	for attempt := range maxRetries {
@@ -83,7 +81,6 @@ func execWithRetry(ctx context.Context, conn driver.Conn, stmt string, logger *s
 // PrepareTableForBulkLoad stops merges and drops secondary indexes on crawl_records
 // to maximize insert throughput during bulk loading.
 func PrepareTableForBulkLoad(ctx context.Context, conn driver.Conn, truncate bool, logger *slog.Logger) error {
-	// Kill any stuck queries from previous runs that may hold the table metadata lock.
 	killStuckQueries(ctx, conn, logger)
 
 	// Truncate first (if requested) to clear all parts before altering settings,

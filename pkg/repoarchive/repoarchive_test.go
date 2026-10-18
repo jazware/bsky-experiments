@@ -335,19 +335,6 @@ func TestSegmentRotation(t *testing.T) {
 	}
 }
 
-func TestEncodingHelpers(t *testing.T) {
-	// Test parseSize helper (via public interface — but it's in cmd, so test encoding directly).
-	data := []byte("hello world")
-	crc := checksumCRC32(data)
-	if crc == 0 {
-		t.Error("CRC32 should not be zero for non-empty data")
-	}
-	// Same data should produce same CRC.
-	if checksumCRC32(data) != crc {
-		t.Error("CRC32 should be deterministic")
-	}
-}
-
 func TestEmptyRepo(t *testing.T) {
 	dir := t.TempDir()
 

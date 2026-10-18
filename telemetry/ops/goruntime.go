@@ -11,9 +11,7 @@ import (
 // GoRuntimeMetrics picks the runtime/metrics the Go collector exports on top
 // of its memstats defaults: what tells a GC running back to back from a busy
 // service. The live heap at or over GOMEMLIMIT makes the GC run cycle after
-// cycle and free nothing, its idle mark workers taking every P (yeet-ebpf on
-// ferrol, 2026-10-14: 434 MB live under a 384 MiB limit, 5.6 cycles a
-// second, 3.5 to 5 cores for 1.5% of a core of work). roles/monitoring's
+// cycle and free nothing, its idle mark workers taking every P. roles/monitoring's
 // go-runtime-alerts.yml reads these names:
 //
 //	go_cpu_classes_{gc_total,gc_mark_assist,gc_mark_idle,idle,total,user}_cpu_seconds_total

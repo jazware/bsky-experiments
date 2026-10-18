@@ -34,25 +34,20 @@ type SegmentWriter struct {
 	totalRepos    uint32
 }
 
-// WriterOption configures a SegmentWriter.
 type WriterOption func(*SegmentWriter)
 
-// WithSegmentSize sets the target segment file size.
 func WithSegmentSize(size int64) WriterOption {
 	return func(w *SegmentWriter) { w.segmentSize = size }
 }
 
-// WithZstdLevel sets the zstd compression level.
 func WithZstdLevel(level int) WriterOption {
 	return func(w *SegmentWriter) { w.zstdLevel = level }
 }
 
-// WithStartSegment sets the starting segment number (for resume).
 func WithStartSegment(n int) WriterOption {
 	return func(w *SegmentWriter) { w.segmentNum = n }
 }
 
-// NewSegmentWriter creates a new SegmentWriter that writes .rca files to outputDir.
 func NewSegmentWriter(outputDir string, opts ...WriterOption) (*SegmentWriter, error) {
 	w := &SegmentWriter{
 		outputDir:   outputDir,
@@ -75,21 +70,18 @@ func NewSegmentWriter(outputDir string, opts ...WriterOption) (*SegmentWriter, e
 	return w, nil
 }
 
-// SegmentNum returns the current segment number.
 func (w *SegmentWriter) SegmentNum() int {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.segmentNum
 }
 
-// TotalRepos returns the total number of repos written across all segments.
 func (w *SegmentWriter) TotalRepos() uint32 {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.totalRepos
 }
 
-// BytesWritten returns the total bytes written across all segments.
 func (w *SegmentWriter) BytesWritten() int64 {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -113,7 +105,6 @@ func (w *SegmentWriter) openSegment() error {
 	w.indexEntries = w.indexEntries[:0]
 	w.createdAt = time.Now()
 
-	// Write file header (values finalized later).
 	header := &FileHeader{
 		Magic:     Magic,
 		Version:   Version,
@@ -127,9 +118,6 @@ func (w *SegmentWriter) openSegment() error {
 	return nil
 }
 
-// WriteRepo serializes a CrawledRepo and writes it to the current segment.
-// This is a convenience method that calls SerializeRepoBlock + WriteSerializedRepo.
-// For higher throughput, serialize in workers and call WriteSerializedRepo directly.
 func (w *SegmentWriter) WriteRepo(repo *CrawledRepo) error {
 	enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.EncoderLevel(w.zstdLevel)))
 	if err != nil {
@@ -186,14 +174,12 @@ func (w *SegmentWriter) WriteSerializedRepo(sr *SerializedRepo) error {
 // The encoder is caller-owned and can be reused across calls (e.g. via sync.Pool).
 // Returns a SerializedRepo ready for WriteSerializedRepo.
 func SerializeRepoBlock(enc *zstd.Encoder, repo *CrawledRepo) (*SerializedRepo, error) {
-	// Sort collection names for deterministic output.
 	collNames := make([]string, 0, len(repo.Collections))
 	for name := range repo.Collections {
 		collNames = append(collNames, name)
 	}
 	sort.Strings(collNames)
 
-	// Compress each collection independently.
 	type collBlock struct {
 		name       string
 		records    []Record
@@ -206,7 +192,6 @@ func SerializeRepoBlock(enc *zstd.Encoder, repo *CrawledRepo) (*SerializedRepo, 
 			continue
 		}
 
-		// Serialize the uncompressed collection data.
 		var raw bytes.Buffer
 		for _, rec := range records {
 			if err := writeLenPrefixed(&raw, []byte(rec.RKey)); err != nil {
@@ -229,7 +214,6 @@ func SerializeRepoBlock(enc *zstd.Encoder, repo *CrawledRepo) (*SerializedRepo, 
 	// We write everything after total_block_size first, then prepend the size.
 	var inner bytes.Buffer
 
-	// DID, PDS, Rev
 	if err := writeLenPrefixed(&inner, []byte(repo.DID)); err != nil {
 		return nil, err
 	}
@@ -240,12 +224,10 @@ func SerializeRepoBlock(enc *zstd.Encoder, repo *CrawledRepo) (*SerializedRepo, 
 		return nil, err
 	}
 
-	// CrawledAt
 	if err := writeInt64(&inner, repo.CrawledAt.UnixMicro()); err != nil {
 		return nil, err
 	}
 
-	// Collection count
 	if err := writeUint16(&inner, uint16(len(collBlocks))); err != nil {
 		return nil, err
 	}
@@ -256,7 +238,6 @@ func SerializeRepoBlock(enc *zstd.Encoder, repo *CrawledRepo) (*SerializedRepo, 
 		return nil, err
 	}
 
-	// Collection TOC entries
 	for _, cb := range collBlocks {
 		if err := writeLenPrefixed(&inner, []byte(cb.name)); err != nil {
 			return nil, err
@@ -269,19 +250,16 @@ func SerializeRepoBlock(enc *zstd.Encoder, repo *CrawledRepo) (*SerializedRepo, 
 		}
 	}
 
-	// Collection data blocks (compressed)
 	for _, cb := range collBlocks {
 		if _, err := inner.Write(cb.compressed); err != nil {
 			return nil, err
 		}
 	}
 
-	// Compute CRC32 of everything after the CRC32 field (TOC + data).
 	innerBytes := inner.Bytes()
 	afterCRC := innerBytes[crcOffset+4:]
 	crcVal := checksumCRC32(afterCRC)
 
-	// Patch in the CRC32 value.
 	innerBytes[crcOffset] = byte(crcVal)
 	innerBytes[crcOffset+1] = byte(crcVal >> 8)
 	innerBytes[crcOffset+2] = byte(crcVal >> 16)
@@ -305,16 +283,13 @@ func SerializeRepoBlock(enc *zstd.Encoder, repo *CrawledRepo) (*SerializedRepo, 
 	}, nil
 }
 
-// finalizeSegment writes the index section and footer, then updates the file header.
 func (w *SegmentWriter) finalizeSegment() error {
 	indexOffset := w.offset
 
-	// Sort index entries by DID for binary search.
 	sort.Slice(w.indexEntries, func(i, j int) bool {
 		return w.indexEntries[i].DID < w.indexEntries[j].DID
 	})
 
-	// Write index section.
 	var indexBuf bytes.Buffer
 	if err := writeUint32(&indexBuf, uint32(len(w.indexEntries))); err != nil {
 		return err
@@ -342,7 +317,6 @@ func (w *SegmentWriter) finalizeSegment() error {
 	}
 	w.offset += int64(len(indexData))
 
-	// Write footer.
 	footer := &FileFooter{
 		IndexOffset: indexOffset,
 		IndexSize:   uint32(len(indexData)),
@@ -354,7 +328,6 @@ func (w *SegmentWriter) finalizeSegment() error {
 		return fmt.Errorf("writing footer: %w", err)
 	}
 
-	// Update the file header with repo count and index offset.
 	if _, err := w.file.Seek(0, io.SeekStart); err != nil {
 		return fmt.Errorf("seeking to header: %w", err)
 	}
@@ -372,7 +345,6 @@ func (w *SegmentWriter) finalizeSegment() error {
 	return w.file.Close()
 }
 
-// Close finalizes the current segment and releases resources.
 func (w *SegmentWriter) Close() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()

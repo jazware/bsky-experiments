@@ -1,28 +1,22 @@
 package endpoints
 
 import (
-	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"net/mail"
-	"slices"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/araddon/dateparse"
 	comatproto "github.com/bluesky-social/indigo/api/atproto"
-	"github.com/bluesky-social/indigo/api/bsky"
 	"github.com/bluesky-social/indigo/atproto/identity"
 	"github.com/bluesky-social/indigo/atproto/syntax"
-	"github.com/bluesky-social/indigo/repo"
 	"github.com/bluesky-social/indigo/xrpc"
 	"github.com/google/uuid"
-	"github.com/ipfs/go-cid"
 	"github.com/jazware/bsky-experiments/pkg/indexer/store"
-	"github.com/jazware/bsky-experiments/telemetry"
 	"github.com/labstack/echo/v4"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"golang.org/x/sync/semaphore"
@@ -42,6 +36,9 @@ func (api *API) CleanupOldRecords(c echo.Context) error {
 	}
 
 	res, err := api.enqueueCleanupJob(ctx, req)
+	if errors.Is(err, errScanInProgress) {
+		return c.JSON(http.StatusTooManyRequests, map[string]string{"error": err.Error()})
+	}
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": fmt.Errorf("error cleaning up records: %w", err).Error()})
 	}
@@ -143,7 +140,6 @@ type cleanupInfo struct {
 func (api *API) enqueueCleanupJob(ctx context.Context, req CleanupOldRecordsRequest) (*cleanupInfo, error) {
 	log := slog.With("source", "cleanup_old_records_handler")
 
-	// If the request has a DID or Handle as an identifier, resolve it to a DID Doc
 	var ident *identity.Identity
 
 	atID, err := syntax.ParseAtIdentifier(req.Identifier)
@@ -167,7 +163,6 @@ func (api *API) enqueueCleanupJob(ctx context.Context, req CleanupOldRecordsRequ
 		pdsHost = ident.PDSEndpoint()
 	}
 
-	// Create a new client
 	client := xrpc.Client{
 		Client: &http.Client{
 			Transport: otelhttp.NewTransport(http.DefaultTransport),
@@ -183,7 +178,6 @@ func (api *API) enqueueCleanupJob(ctx context.Context, req CleanupOldRecordsRequ
 
 	log = log.With("identifier", req.Identifier)
 
-	// Login as the user
 	out, err := comatproto.ServerCreateSession(ctx, &client, &comatproto.ServerCreateSession_Input{
 		Identifier: req.Identifier,
 		Password:   req.AppPassword,
@@ -193,7 +187,6 @@ func (api *API) enqueueCleanupJob(ctx context.Context, req CleanupOldRecordsRequ
 		return nil, fmt.Errorf("error logging in: %w", err)
 	}
 
-	// Set client auth info
 	client.Auth = &xrpc.AuthInfo{
 		Did:        out.Did,
 		Handle:     out.Handle,
@@ -204,7 +197,6 @@ func (api *API) enqueueCleanupJob(ctx context.Context, req CleanupOldRecordsRequ
 	log = log.With("did", out.Did)
 	log = log.With("handle", out.Handle)
 
-	// Check if we have a pending job for this DID
 	existingJobs, err := api.Store.GetRunningCleanupJobsByRepo(ctx, out.Did)
 	if err != nil {
 		log.Error("Error getting existing jobs", "error", err)
@@ -216,7 +208,6 @@ func (api *API) enqueueCleanupJob(ctx context.Context, req CleanupOldRecordsRequ
 		}, nil
 	}
 
-	// Get the user's PDS from PLC
 	did, err := syntax.ParseDID(out.Did)
 	if err != nil {
 		log.Error("Error parsing DID", "error", err)
@@ -240,112 +231,30 @@ func (api *API) enqueueCleanupJob(ctx context.Context, req CleanupOldRecordsRequ
 
 	log = log.With("pds", client.Host)
 
-	// Get the user's Repo from the PDS
-	repoBytes, err := comatproto.SyncGetRepo(ctx, &client, did.String(), "")
+	crit := cleanupCriteria{
+		types:  req.CleanupTypes,
+		before: time.Now().AddDate(0, 0, -req.DeleteUntilDaysAgo),
+	}
+	release, err := api.repoScans().acquire(ctx, did.String())
 	if err != nil {
-		log.Error("Error getting repo from PDS", "error", err)
-		return nil, fmt.Errorf("error getting repo from PDS: %w", err)
+		log.Info("Not scanning repo", "error", err)
+		return nil, err
+	}
+	scan, err := scanRepo(ctx, &client, did.String(), crit, 0)
+	release()
+	if err != nil {
+		log.Error("Error scanning repo", "error", err)
+		return nil, err
 	}
 
-	rr, err := repo.ReadRepoFromCar(ctx, bytes.NewReader(repoBytes))
-	if err != nil {
-		log.Error("Error reading repo CAR", "error", err)
-		return nil, fmt.Errorf("error reading repo CAR: %w", err)
-	}
-
-	recordsToDelete := []string{}
-	lk := sync.Mutex{}
-
-	// Iterate over records in the repo to find the ones to delete
-	// indigo opens a span per record: keep the repo walk out of the trace.
-	walkCtx := telemetry.WithoutChildSpans(ctx)
-	err = rr.ForEach(walkCtx, "app.bsky.feed.", func(path string, nodeCid cid.Cid) error {
-		log := log.With("path", path)
-		// Skip threadgates
-		if strings.Contains(path, "threadgate") {
-			return nil
-		}
-		_, rec, err := rr.GetRecord(walkCtx, path)
-		if err != nil {
-			log.Error("Error getting record", "error", err)
-			return nil
-		}
-
-		switch rec := rec.(type) {
-		case *bsky.FeedPost:
-			createdAt, err := dateparse.ParseAny(rec.CreatedAt)
-			if err != nil {
-				log.Error("Error parsing date", "error", err)
-				return nil
-			}
-			if createdAt.After(time.Now().AddDate(0, 0, -req.DeleteUntilDaysAgo)) {
-				return nil
-			}
-
-			hasMedia := rec.Embed != nil && rec.Embed.EmbedImages != nil && len(rec.Embed.EmbedImages.Images) > 0
-
-			if hasMedia {
-				if slices.Contains(req.CleanupTypes, "post_with_media") {
-					lk.Lock()
-					recordsToDelete = append(recordsToDelete, path)
-					lk.Unlock()
-				}
-				return nil
-			}
-
-			if slices.Contains(req.CleanupTypes, "post") {
-				lk.Lock()
-				recordsToDelete = append(recordsToDelete, path)
-				lk.Unlock()
-			}
-		case *bsky.FeedRepost:
-			if !slices.Contains(req.CleanupTypes, "repost") {
-				return nil
-			}
-			createdAt, err := dateparse.ParseAny(rec.CreatedAt)
-			if err != nil {
-				log.Error("Error parsing date", "error", err)
-				return nil
-			}
-
-			if createdAt.Before(time.Now().AddDate(0, 0, -req.DeleteUntilDaysAgo)) {
-				lk.Lock()
-				recordsToDelete = append(recordsToDelete, path)
-				lk.Unlock()
-			}
-		case *bsky.FeedLike:
-			if !slices.Contains(req.CleanupTypes, "like") {
-				return nil
-			}
-			createdAt, err := dateparse.ParseAny(rec.CreatedAt)
-			if err != nil {
-				log.Error("Error parsing date", "error", err)
-				return nil
-			}
-
-			if createdAt.Before(time.Now().AddDate(0, 0, -req.DeleteUntilDaysAgo)) {
-				lk.Lock()
-				recordsToDelete = append(recordsToDelete, path)
-				lk.Unlock()
-			}
-		}
-
-		return nil
-	})
-	if err != nil {
-		log.Error("Error iterating over records", "error", err)
-		return nil, fmt.Errorf("error iterating over records: %w", err)
-	}
-
-	log.Info("Found records to delete", "count", len(recordsToDelete))
+	log.Info("Found records to delete", "count", scan.Total, "mst_bytes", scan.NodeBytes)
 
 	info := cleanupInfo{
-		NumEnqueued: len(recordsToDelete),
+		NumEnqueued: scan.Total,
 		DryRun:      !req.ActuallyDeleteStuff,
 		Message:     "Records will not be deleted",
 	}
 	if req.ActuallyDeleteStuff {
-		// Create a new job
 		now := time.Now().UTC()
 		job := store.RepoCleanupJob{
 			JobID:           uuid.New().String(),
@@ -355,7 +264,7 @@ func (api *API) enqueueCleanupJob(ctx context.Context, req CleanupOldRecordsRequ
 			DeleteOlderThan: time.Now().UTC().AddDate(0, 0, -req.DeleteUntilDaysAgo),
 			NumDeleted:      0,
 			NumDeletedToday: 0,
-			EstNumRemaining: int64(len(recordsToDelete)),
+			EstNumRemaining: int64(scan.Total),
 			JobState:        "running",
 			CreatedAt:       now,
 			UpdatedAt:       now,
@@ -368,7 +277,7 @@ func (api *API) enqueueCleanupJob(ctx context.Context, req CleanupOldRecordsRequ
 			return nil, fmt.Errorf("error creating job: %w", err)
 		}
 
-		info.Message = fmt.Sprintf("%d records enqueued for deletion in job at: https://bsky-search.jazco.io/repo/cleanup?job_id=%s", len(recordsToDelete), createdJob.JobID)
+		info.Message = fmt.Sprintf("%d records enqueued for deletion in job at: https://bsky-search.jazco.io/repo/cleanup?job_id=%s", scan.Total, createdJob.JobID)
 		info.JobID = createdJob.JobID
 		log.Info("Created cleanup job", "job_id", createdJob.JobID)
 	}
@@ -376,7 +285,6 @@ func (api *API) enqueueCleanupJob(ctx context.Context, req CleanupOldRecordsRequ
 	return &info, nil
 }
 
-// RunCleanupDaemon runs a daemon that periodically checks for cleanup jobs to run
 func (api *API) RunCleanupDaemon(ctx context.Context) {
 	log := slog.With("source", "cleanup_daemon")
 	log.Info("Starting cleanup daemon")
@@ -412,6 +320,8 @@ func (api *API) RunCleanupDaemon(ctx context.Context) {
 		}
 
 		wg := sync.WaitGroup{}
+		// Repo downloads also share api.repoScans; the rest of a job is
+		// rate-limited deletes.
 		maxConcurrent := 10
 		sem := semaphore.NewWeighted(int64(maxConcurrent))
 		for i := range jobsToRun {
@@ -429,13 +339,19 @@ func (api *API) RunCleanupDaemon(ctx context.Context) {
 				}()
 				log := log.With("job_id", job.JobID, "did", job.Repo)
 				resJob, err := api.cleanupNextBatch(ctx, job)
+				if errors.Is(err, errScanInProgress) {
+					return
+				}
 				if err != nil {
 					log.Error("Error cleaning up batch", "error", err)
+					if resJob == nil {
+						resJob = &job
+					}
+					// Save the job so it keeps a rotated refresh token and
+					// waits out the hour before its next try.
 					now := time.Now().UTC()
-					resJob = &job
 					resJob.LastDeletedAt = &now
 					resJob.UpdatedAt = now
-					return
 				}
 
 				if resJob != nil {
@@ -472,13 +388,20 @@ func (api *API) cleanupNextBatch(ctx context.Context, job store.RepoCleanupJob) 
 		job.NumDeletedToday = 0
 	}
 
+	// Take a scan slot before refreshing: the refresh rotates the token, and
+	// a job that then waited and gave up would have to save it.
+	release, err := api.repoScans().acquire(ctx, job.Repo)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+
 	ident, err := api.Directory.LookupDID(ctx, syntax.DID(job.Repo))
 	if err != nil {
 		log.Error("Error looking up DID", "error", err)
 		return nil, fmt.Errorf("error looking up DID: %w", err)
 	}
 
-	// Create a new client
 	client := xrpc.Client{
 		Client: &http.Client{
 			Transport: otelhttp.NewTransport(http.DefaultTransport),
@@ -527,117 +450,27 @@ func (api *API) cleanupNextBatch(ctx context.Context, job store.RepoCleanupJob) 
 		AccessJwt:  out.AccessJwt,
 	}
 
+	// The old refresh token is revoked now: every return from here on hands
+	// back the job, so the daemon saves the new one.
 	job.RefreshToken = out.RefreshJwt
 
 	log = log.With("pds", client.Host)
 
-	// Talk to the PDS hosting the repo
 	client.Host = ident.PDSEndpoint()
 
-	// Get the user's Repo from the PDS
-	repoBytes, err := comatproto.SyncGetRepo(ctx, &client, job.Repo, "")
+	crit := cleanupCriteria{types: job.CleanupTypes, before: job.DeleteOlderThan}
+	scan, err := scanRepo(ctx, &client, job.Repo, crit, maxDeletesPerHour+1)
+	release()
 	if err != nil {
-		log.Error("Error getting repo from PDS", "error", err)
-		return nil, fmt.Errorf("error getting repo from PDS: %w", err)
+		log.Error("Error scanning repo", "error", err)
+		return &job, err
 	}
 
-	rr, err := repo.ReadRepoFromCar(ctx, bytes.NewReader(repoBytes))
-	if err != nil {
-		log.Error("Error reading repo CAR", "error", err)
-		return nil, fmt.Errorf("error reading repo CAR: %w", err)
-	}
+	log.Info("Found records to delete", "count", scan.Total, "mst_bytes", scan.NodeBytes)
 
-	recordsToDelete := []string{}
-	lk := sync.Mutex{}
-
-	// Iterate over records in the repo to find the ones to delete
-	// indigo opens a span per record: keep the repo walk out of the trace.
-	walkCtx := telemetry.WithoutChildSpans(ctx)
-	err = rr.ForEach(walkCtx, "app.bsky.feed.", func(path string, nodeCid cid.Cid) error {
-		log := log.With("path", path)
-		// Skip threadgates
-		if strings.Contains(path, "threadgate") {
-			return nil
-		}
-		_, rec, err := rr.GetRecord(walkCtx, path)
-		if err != nil {
-			log.Error("Error getting record", "error", err)
-			return nil
-		}
-
-		switch rec := rec.(type) {
-		case *bsky.FeedPost:
-			createdAt, err := dateparse.ParseAny(rec.CreatedAt)
-			if err != nil {
-				log.Error("Error parsing date", "error", err)
-				return nil
-			}
-			if createdAt.After(job.DeleteOlderThan) {
-				return nil
-			}
-
-			hasMedia := rec.Embed != nil && ((rec.Embed.EmbedImages != nil && len(rec.Embed.EmbedImages.Images) > 0) ||
-				(rec.Embed.EmbedRecordWithMedia != nil && rec.Embed.EmbedRecordWithMedia.Media != nil))
-
-			if hasMedia {
-				if slices.Contains(job.CleanupTypes, "post_with_media") {
-					lk.Lock()
-					recordsToDelete = append(recordsToDelete, path)
-					lk.Unlock()
-				}
-				return nil
-			}
-
-			if slices.Contains(job.CleanupTypes, "post") {
-				lk.Lock()
-				recordsToDelete = append(recordsToDelete, path)
-				lk.Unlock()
-			}
-		case *bsky.FeedRepost:
-			if !slices.Contains(job.CleanupTypes, "repost") {
-				return nil
-			}
-			createdAt, err := dateparse.ParseAny(rec.CreatedAt)
-			if err != nil {
-				log.Error("Error parsing date", "error", err)
-				return nil
-			}
-
-			if createdAt.Before(job.DeleteOlderThan) {
-				lk.Lock()
-				recordsToDelete = append(recordsToDelete, path)
-				lk.Unlock()
-			}
-		case *bsky.FeedLike:
-			if !slices.Contains(job.CleanupTypes, "like") {
-				return nil
-			}
-			createdAt, err := dateparse.ParseAny(rec.CreatedAt)
-			if err != nil {
-				log.Error("Error parsing date", "error", err)
-				return nil
-			}
-
-			if createdAt.Before(job.DeleteOlderThan) {
-				lk.Lock()
-				recordsToDelete = append(recordsToDelete, path)
-				lk.Unlock()
-			}
-		}
-
-		return nil
-	})
-	if err != nil {
-		log.Error("Error iterating over records", "error", err)
-		return nil, fmt.Errorf("error iterating over records: %w", err)
-	}
-
-	log.Info("Found records to delete", "count", len(recordsToDelete))
-
-	// Create delete batches of 10 records each for up to 4,000 records
 	deleteBatches := []*comatproto.RepoApplyWrites_Input{}
 	batchNum := 0
-	for i, path := range recordsToDelete {
+	for i, path := range scan.Paths {
 		if i > maxDeletesPerHour || job.NumDeletedToday+int64(i) > int64(maxDeletesPerDay) {
 			break
 		}
@@ -667,35 +500,38 @@ func (api *API) cleanupNextBatch(ctx context.Context, job store.RepoCleanupJob) 
 	}
 
 	numDeleted := 0
+	recordProgress := func() {
+		job.NumDeletedToday += int64(numDeleted)
+		job.NumDeleted += int64(numDeleted)
+		job.EstNumRemaining = int64(scan.Total - numDeleted)
+	}
 
 	limiter := rate.NewLimiter(rate.Limit(4), 1)
 	for _, batch := range deleteBatches {
 		if err := limiter.Wait(ctx); err != nil {
 			log.Error("Error waiting for rate limiter", "error", err)
-			return nil, fmt.Errorf("error waiting for rate limiter: %w", err)
+			recordProgress()
+			return &job, fmt.Errorf("error waiting for rate limiter: %w", err)
 		}
 
 		_, err := comatproto.RepoApplyWrites(ctx, &client, batch)
 		if err != nil {
 			log.Error("Error applying writes", "error", err)
-			err = fmt.Errorf("Errored out after deleting (%d) records: %w", numDeleted, err)
-			return nil, err
+			recordProgress()
+			return &job, fmt.Errorf("Errored out after deleting (%d) records: %w", numDeleted, err)
 		}
 		numDeleted += len(batch.Writes)
 	}
 
-	estRemaining := len(recordsToDelete) - numDeleted
+	recordProgress()
 
 	log.Info("Deleted records",
 		"count", numDeleted,
-		"total", len(recordsToDelete),
-		"est_remaining", estRemaining,
+		"total", scan.Total,
+		"est_remaining", job.EstNumRemaining,
 	)
 
 	now := time.Now().UTC()
-	job.NumDeletedToday += int64(numDeleted)
-	job.NumDeleted += int64(numDeleted)
-	job.EstNumRemaining = int64(estRemaining)
 	job.UpdatedAt = now
 	job.LastDeletedAt = &now
 

@@ -19,7 +19,6 @@ type addPDSRequest struct {
 	Host string `json:"host"`
 }
 
-// GetPDSList returns the usercount scrape list with per-host user counts.
 func (api *API) GetPDSList(c echo.Context) error {
 	hosts := api.SearchService.UserCount.Hosts()
 	return c.JSON(http.StatusOK, map[string]any{

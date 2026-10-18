@@ -39,7 +39,6 @@ const (
 	chLogInterval   = 30 * time.Second
 )
 
-// chBatch holds columnar arrays for a batch insert into crawl_records.
 type chBatch struct {
 	repos       []string
 	collections []string
@@ -84,7 +83,6 @@ func (b *chBatch) append(repo, collection, rkey, recordJSON string, crawledAt ti
 	b.timeUSs = append(b.timeUSs, crawledAt.UnixMicro())
 }
 
-// CHWriter receives CrawledRepos and batch-inserts them into ClickHouse.
 type CHWriter struct {
 	conn   driver.Conn
 	input  <-chan *repoarchive.CrawledRepo
@@ -95,7 +93,6 @@ type CHWriter struct {
 	done chan struct{}
 }
 
-// NewCHWriter creates a CHWriter that reads from the given channel.
 func NewCHWriter(conn driver.Conn, input <-chan *repoarchive.CrawledRepo, logger *slog.Logger) *CHWriter {
 	return &CHWriter{
 		conn:   conn,
@@ -105,7 +102,6 @@ func NewCHWriter(conn driver.Conn, input <-chan *repoarchive.CrawledRepo, logger
 	}
 }
 
-// Run starts the writer loop. It blocks until the input channel is closed or ctx is cancelled.
 func (w *CHWriter) Run(ctx context.Context) {
 	defer close(w.done)
 
@@ -179,13 +175,11 @@ func (w *CHWriter) Run(ctx context.Context) {
 	}
 }
 
-// Wait blocks until the writer has finished.
 func (w *CHWriter) Wait() error {
 	<-w.done
 	return w.err
 }
 
-// Sent returns the number of records successfully sent.
 func (w *CHWriter) Sent() int64 {
 	return w.sent.Load()
 }
@@ -198,8 +192,7 @@ func (w *CHWriter) flattenRepo(repo *repoarchive.CrawledRepo, b *chBatch) {
 	}
 }
 
-// bytesToString converts a byte slice to a string without copying.
-// Safe when the byte slice will not be modified after conversion.
+// bytesToString is safe only while b is not modified afterwards.
 func bytesToString(b []byte) string {
 	return unsafe.String(unsafe.SliceData(b), len(b))
 }

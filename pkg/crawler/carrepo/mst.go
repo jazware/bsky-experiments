@@ -29,14 +29,12 @@ func walkNode(blocks map[cid.Cid][]byte, nodeCid cid.Cid, cb func(key string, va
 		return fmt.Errorf("decoding MST node: %w", err)
 	}
 
-	// Recurse into left subtree first (smaller keys).
 	if nd.Left != nil {
 		if err := walkNode(blocks, *nd.Left, cb, reader); err != nil {
 			return err
 		}
 	}
 
-	// Walk entries, reconstructing keys via prefix compression.
 	var lastKey []byte
 	for i := range nd.Entries {
 		e := &nd.Entries[i]
@@ -48,7 +46,6 @@ func walkNode(blocks map[cid.Cid][]byte, nodeCid cid.Cid, cb func(key string, va
 			return err
 		}
 
-		// Recurse into right subtree (keys between this entry and the next).
 		if e.Tree != nil {
 			if err := walkNode(blocks, *e.Tree, cb, reader); err != nil {
 				return err

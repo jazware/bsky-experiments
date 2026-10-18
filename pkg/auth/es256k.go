@@ -9,8 +9,7 @@ import (
 	"gitlab.com/yawning/secp256k1-voi/secec"
 )
 
-// signingMethodES256K verifies ES256K (secp256k1, R || S) JWT signatures.
-// Kept in-tree because github.com/ericvolp12/jwt-go-secp256k1 is built on
+// signingMethodES256K is kept in-tree because github.com/ericvolp12/jwt-go-secp256k1 is built on
 // golang-jwt v3, which has an unfixed vulnerability (GO-2025-3553).
 type signingMethodES256K struct{}
 

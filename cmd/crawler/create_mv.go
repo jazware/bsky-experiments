@@ -42,7 +42,6 @@ func runCreateMV(cctx *cli.Context) error {
 		return fmt.Errorf("clickhouse setup: %w", err)
 	}
 
-	// DDL: create target tables and materialized views.
 	ddl := []struct {
 		name string
 		stmt string
@@ -133,7 +132,6 @@ func runCreateMV(cctx *cli.Context) error {
 		}
 	}
 
-	// Backfill from existing data.
 	backfills := []struct {
 		name string
 		stmt string

@@ -16,7 +16,6 @@ const (
 	DefaultQueueSize = 50_000
 )
 
-// BatchInserter handles batched inserts of PLC operations to ClickHouse
 type BatchInserter struct {
 	db     driver.Conn
 	logger *slog.Logger
@@ -28,7 +27,6 @@ type BatchInserter struct {
 	cancel context.CancelFunc
 }
 
-// NewBatchInserter creates a new PLC batch inserter
 func NewBatchInserter(db driver.Conn, logger *slog.Logger) *BatchInserter {
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -40,19 +38,16 @@ func NewBatchInserter(db driver.Conn, logger *slog.Logger) *BatchInserter {
 		cancel: cancel,
 	}
 
-	// Start batch worker
 	bi.wg.Add(1)
 	go bi.batchWorker()
 
 	return bi
 }
 
-// Add adds a PLC operation to the batch queue
 func (bi *BatchInserter) Add(op *PLCBatch) {
 	bi.queue <- op
 }
 
-// batchWorker processes batches of PLC operations
 func (bi *BatchInserter) batchWorker() {
 	defer bi.wg.Done()
 
@@ -91,7 +86,6 @@ func (bi *BatchInserter) batchWorker() {
 	}
 }
 
-// insertBatch inserts a batch of PLC operations into the plc_operations table
 func (bi *BatchInserter) insertBatch(ctx context.Context, batch []*PLCBatch) error {
 	if len(batch) == 0 {
 		return nil
@@ -123,13 +117,11 @@ func (bi *BatchInserter) insertBatch(ctx context.Context, batch []*PLCBatch) err
 	return nil
 }
 
-// Shutdown gracefully shuts down the batch inserter
 func (bi *BatchInserter) Shutdown() {
 	bi.cancel()
 	bi.wg.Wait()
 }
 
-// QueueLen returns the current queue length
 func (bi *BatchInserter) QueueLen() int {
 	return len(bi.queue)
 }

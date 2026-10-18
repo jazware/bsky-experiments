@@ -150,7 +150,6 @@ func runCrawl(cctx *cli.Context) error {
 		return fmt.Errorf("creating crawler: %w", err)
 	}
 
-	// Run crawl in background, handle signals.
 	crawlDone := make(chan error, 1)
 	go func() {
 		crawlDone <- c.Run(ctx)
@@ -162,7 +161,6 @@ func runCrawl(cctx *cli.Context) error {
 	case <-signals:
 		logger.Info("shutting down on signal...")
 		cancel()
-		// Force shutdown after 30s.
 		go func() {
 			<-time.After(30 * time.Second)
 			log.Fatal("failed to shut down in time, forcing exit")

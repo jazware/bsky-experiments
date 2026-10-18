@@ -15,14 +15,12 @@ var missingBlocksTotal = promauto.NewCounter(prometheus.CounterOpts{
 	Help: "Records skipped due to missing CID blocks in CAR data.",
 })
 
-// Repo holds a parsed ATProto repository from a CAR file.
 type Repo struct {
 	Rev    string
 	root   cid.Cid
 	blocks map[cid.Cid][]byte
 }
 
-// ParseRepo reads a CARv1 stream and extracts the repo revision and MST root.
 func ParseRepo(r io.Reader) (*Repo, error) {
 	rootCid, blocks, err := ReadCAR(r)
 	if err != nil {

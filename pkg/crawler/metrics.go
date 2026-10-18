@@ -5,7 +5,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
-// Repo processing metrics.
 var (
 	reposProcessedTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "crawler_repos_processed_total",
@@ -37,7 +36,6 @@ var (
 	})
 )
 
-// HTTP metrics.
 var (
 	httpRequestsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "crawler_http_requests_total",
@@ -51,7 +49,6 @@ var (
 	})
 )
 
-// Record-level drop metrics.
 var (
 	recordsDroppedTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "crawler_records_dropped_total",
@@ -59,7 +56,6 @@ var (
 	}, []string{"reason"})
 )
 
-// Writer metrics.
 var (
 	segmentsFinalizedTotal = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "crawler_segments_finalized_total",
@@ -72,7 +68,6 @@ var (
 	})
 )
 
-// Progress metrics.
 var (
 	didsProcessedTotal = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "crawler_dids_processed_total",
@@ -116,7 +111,6 @@ var (
 	})
 )
 
-// Discovery metrics.
 var (
 	hostsDiscoveredTotal = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "crawler_hosts_discovered_total",
@@ -139,7 +133,6 @@ var (
 	}, []string{"error_type"})
 )
 
-// Verification metrics.
 var (
 	verificationTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "crawler_verification_total",
@@ -147,7 +140,6 @@ var (
 	}, []string{"result"})
 )
 
-// Prepare metrics.
 var (
 	prepareInsertedTotal = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "crawler_prepare_inserted_total",

@@ -56,12 +56,10 @@ func callerName(skip int) string {
 
 	pc := pcs[0]
 
-	// Check cache first
 	if cached, ok := callerCache.Load(pc); ok {
 		return cached.(string)
 	}
 
-	// Cache miss - resolve the function name
 	frames := runtime.CallersFrames(pcs[:])
 	frame, _ := frames.Next()
 
@@ -71,7 +69,6 @@ func callerName(skip int) string {
 		name = name[idx+1:]
 	}
 
-	// Store in cache for future lookups
 	callerCache.Store(pc, name)
 	return name
 }
@@ -98,18 +95,15 @@ func observe(ctx context.Context, operation string, err *error, attrs ...attribu
 	ctx, span := tracer.Start(ctx, "store."+caller, trace.WithAttributes(append(baseAttrs, attrs...)...))
 
 	return ctx, func(resultAttrs ...attribute.KeyValue) {
-		// Add any result attributes
 		if len(resultAttrs) > 0 {
 			span.SetAttributes(resultAttrs...)
 		}
 
-		// Record error on span if present
 		if *err != nil {
 			span.RecordError(*err)
 		}
 		span.End()
 
-		// Record metrics
 		duration := time.Since(start).Seconds()
 		storeOpDuration.WithLabelValues(operation, caller).Observe(duration)
 

@@ -21,7 +21,6 @@ type Progress struct {
 	logger       *slog.Logger
 }
 
-// NewProgress creates a new in-memory progress tracker.
 func NewProgress(logger *slog.Logger) *Progress {
 	categories := []string{
 		"not_found", "deactivated", "takendown", "rate_limited",
@@ -41,7 +40,6 @@ func NewProgress(logger *slog.Logger) *Progress {
 	return p
 }
 
-// MarkCompleted records a DID as completed.
 func (p *Progress) MarkCompleted(did string) {
 	p.completed.Store(did, struct{}{})
 	didsProcessedTotal.Inc()
@@ -84,27 +82,22 @@ func (p *Progress) FilterPage(pdsGroups map[string][]string) int {
 	return filtered
 }
 
-// GetCursor returns the pagination cursor. Returns "" if not set.
 func (p *Progress) GetCursor() string {
 	return p.cursor
 }
 
-// SetCursor stores the pagination cursor.
 func (p *Progress) SetCursor(cursor string) {
 	p.cursor = cursor
 }
 
-// ClearCursor resets the pagination cursor.
 func (p *Progress) ClearCursor() {
 	p.cursor = ""
 }
 
-// GetSegmentNum returns the current segment number.
 func (p *Progress) GetSegmentNum() int {
 	return int(p.segmentNum.Load())
 }
 
-// SetSegmentNum stores the current segment number.
 func (p *Progress) SetSegmentNum(n int) {
 	p.segmentNum.Store(int32(n))
 }

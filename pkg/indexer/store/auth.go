@@ -8,7 +8,6 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 )
 
-// APIKey represents an API key with its metadata
 type APIKey struct {
 	APIKey       string
 	AuthEntity   []byte
@@ -16,7 +15,6 @@ type APIKey struct {
 	CreatedAt    time.Time
 }
 
-// CreateAPIKey creates a new API key
 func (s *Store) CreateAPIKey(ctx context.Context, apiKey, authEntity, assignedUser string) (err error) {
 	_, done := observe(ctx, "exec", &err,
 		attribute.String("assigned.actor", assignedUser))
@@ -36,7 +34,6 @@ func (s *Store) CreateAPIKey(ctx context.Context, apiKey, authEntity, assignedUs
 	return nil
 }
 
-// GetAPIKey retrieves an API key by its value
 func (s *Store) GetAPIKey(ctx context.Context, apiKey string) (key *APIKey, err error) {
 	ctx, done := observe(ctx, "query_row", &err)
 	defer done()

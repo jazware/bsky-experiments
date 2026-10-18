@@ -8,7 +8,6 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 )
 
-// Store wraps the ClickHouse connection
 type Store struct {
 	DB driver.Conn
 }
@@ -39,7 +38,6 @@ func NewStore(dsn, username, password string) (*Store, error) {
 	return &Store{DB: conn}, nil
 }
 
-// Close closes the ClickHouse connection
 func (s *Store) Close() error {
 	return s.DB.Close()
 }

@@ -5,14 +5,12 @@ import (
 	"strings"
 )
 
-// URI represents a parsed AT URI
 type URI struct {
 	Did        string
 	Collection string
 	RKey       string
 }
 
-// ParseURI parses an AT URI into its components
 func ParseURI(uri string) (*URI, error) {
 	// URI format: at://did:plc:xxx/collection/rkey
 	if !strings.HasPrefix(uri, "at://") {

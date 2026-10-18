@@ -20,6 +20,7 @@ import (
 	"github.com/jazware/bsky-experiments/pkg/secretfile"
 	"github.com/jazware/bsky-experiments/pkg/usercount"
 	"github.com/jazware/bsky-experiments/telemetry"
+	"github.com/jazware/bsky-experiments/telemetry/ops"
 	"github.com/jazware/bsky-experiments/version"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
@@ -149,20 +150,20 @@ func Search(cctx *cli.Context) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Setup signal handlers
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
 
-	// Initialize logger
 	logger := telemetry.StartLogger(cctx)
 	logger.Info("starting search service",
 		"version", version.Version,
 		"commit", version.GitCommit)
 
-	// Initialize metrics
 	telemetry.StartMetrics(cctx)
 
-	// Initialize tracing if configured
+	if limit := ops.SetMemoryLimitFromHost(0.8); limit > 0 {
+		logger.Info("set GOMEMLIMIT from the host's memory", "bytes", limit)
+	}
+
 	if os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT") != "" {
 		logger.Info("initializing tracer")
 		shutdown, err := telemetry.StartTracing(cctx)
@@ -190,7 +191,6 @@ func Search(cctx *cli.Context) error {
 		secrets[flag] = v
 	}
 
-	// Connect to ClickHouse
 	logger.Info("connecting to clickhouse", "address", cctx.String("clickhouse-address"))
 	chStore, err := store.NewStore(
 		cctx.String("clickhouse-address"),
@@ -203,23 +203,19 @@ func Search(cctx *cli.Context) error {
 	defer chStore.Close()
 	logger.Info("connected to clickhouse")
 
-	// Connect to Redis
 	logger.Info("connecting to redis", "address", cctx.String("redis-address"))
 	redisClient := redis.NewClient(&redis.Options{
 		Addr: cctx.String("redis-address"),
 	})
 
-	// Enable tracing instrumentation for Redis
 	if err := redisotel.InstrumentTracing(redisClient); err != nil {
 		return fmt.Errorf("failed to instrument redis with tracing: %w", err)
 	}
 
-	// Enable metrics instrumentation for Redis
 	if err := redisotel.InstrumentMetrics(redisClient); err != nil {
 		return fmt.Errorf("failed to instrument redis with metrics: %w", err)
 	}
 
-	// Test the connection to redis
 	_, err = redisClient.Ping(ctx).Result()
 	if err != nil {
 		return fmt.Errorf("failed to connect to redis: %w", err)
@@ -228,7 +224,6 @@ func Search(cctx *cli.Context) error {
 
 	userCount := usercount.NewUserCount(ctx, redisClient)
 
-	// Create search service
 	searchService, err := search.NewSearchService(
 		ctx,
 		logger,
@@ -241,7 +236,6 @@ func Search(cctx *cli.Context) error {
 		return fmt.Errorf("failed to create search service: %w", err)
 	}
 
-	// Create the AppView client for embed hydration
 	appviewClient := appview.NewClient(
 		logger,
 		cctx.String("bsky-pds-host"),
@@ -267,7 +261,6 @@ func Search(cctx *cli.Context) error {
 		defer renderer.Close()
 	}
 
-	// Create endpoints
 	api, err := endpoints.NewAPI(
 		logger,
 		searchService,
@@ -282,32 +275,26 @@ func Search(cctx *cli.Context) error {
 		return fmt.Errorf("failed to create API: %w", err)
 	}
 
-	// Start background workers
 	logger.Info("starting stats refresh worker")
 	go searchService.StartStatsRefreshWorker(ctx)
 
 	logger.Info("starting cleanup daemon")
 	go api.RunCleanupDaemon(ctx)
 
-	// Setup Echo router
 	e := echo.New()
 	e.HideBanner = true
 	e.HidePort = true
 
-	// Recovery middleware
 	e.Use(middleware.Recover())
 
-	// Structured logging middleware
 	e.Use(slogecho.NewWithFilters(
 		logger,
 		slogecho.IgnorePath("/metrics"),
 		slogecho.IgnorePath("/healthz"),
 	))
 
-	// Serve static files from the public folder
 	e.Static("/public", "./public")
 
-	// OTEL Middleware
 	e.Use(otelecho.Middleware(
 		"search-api",
 		otelecho.WithSkipper(func(c echo.Context) bool {
@@ -315,7 +302,6 @@ func Search(cctx *cli.Context) error {
 		}),
 	))
 
-	// CORS middleware
 	corsHosts := cctx.StringSlice("cors-allowed-hosts")
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
 		AllowOrigins: []string{"https://bsky.jazco.dev"},
@@ -330,14 +316,12 @@ func Search(cctx *cli.Context) error {
 		},
 	}))
 
-	// Prometheus metrics endpoint
 	e.GET("/metrics", echo.WrapHandler(promhttp.Handler()))
 
 	// ClickHouse and Redis answered before the router existed, so serving at
 	// all is what yeet's gate needs to know.
 	e.GET("/healthz", func(c echo.Context) error { return c.String(http.StatusOK, "ok") })
 
-	// Register routes
 	e.GET("/stats", api.GetStats)
 	e.GET("/redir", api.RedirectAtURI)
 	e.GET("/repo/:did", api.GetRepoAsJSON)
@@ -347,7 +331,6 @@ func Search(cctx *cli.Context) error {
 	e.DELETE("/repo/cleanup", api.CancelCleanupJob)
 	e.GET("/repo/cleanup/stats", api.GetCleanupStats)
 
-	// API-key auth (same api_keys table the feedgen admin dashboard uses)
 	auther, err := auth.NewAuth(
 		100,
 		time.Hour,
@@ -370,7 +353,6 @@ func Search(cctx *cli.Context) error {
 	e.GET("/embed/post/:ident/:rkey/card.png", api.GetPostCardImage)
 	e.GET("/oembed", api.GetOEmbed)
 
-	// Start HTTP server in a goroutine
 	serverErr := make(chan error, 1)
 
 	go func() {
@@ -380,7 +362,6 @@ func Search(cctx *cli.Context) error {
 		}
 	}()
 
-	// Wait for shutdown signal or error
 	select {
 	case <-signals:
 		logger.Info("shutting down on signal")
@@ -393,7 +374,6 @@ func Search(cctx *cli.Context) error {
 
 	logger.Info("beginning graceful shutdown")
 
-	// Force shutdown after timeout
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
 
@@ -402,7 +382,6 @@ func Search(cctx *cli.Context) error {
 		return err
 	}
 
-	// Cleanup search service
 	if err := searchService.Shutdown(); err != nil {
 		logger.Error("failed to shut down search service", "error", err)
 		return err

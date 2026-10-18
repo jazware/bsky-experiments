@@ -15,7 +15,6 @@ import (
 
 var tracer = otel.Tracer("search-service")
 
-// SearchService handles stats caching and background refresh
 type SearchService struct {
 	Logger        *slog.Logger
 	Store         *store.Store
@@ -23,7 +22,6 @@ type SearchService struct {
 	RedisClient   *redis.Client
 	StatsCacheTTL time.Duration
 
-	// Stats cache with channel-based signaling
 	statsCache     *StatsCache
 	statsCacheMux  sync.RWMutex
 	statsReadyChan chan struct{}
@@ -32,14 +30,12 @@ type SearchService struct {
 	shutdownOnce   sync.Once
 }
 
-// StatsCache holds cached statistics data
 type StatsCache struct {
 	Stats      SiteStats
 	Expiration time.Time
 	UpdatedAt  time.Time
 }
 
-// SiteStats represents site-wide statistics
 type SiteStats struct {
 	TotalUsers   int              `json:"total_users"`
 	TotalPosts   uint64           `json:"total_posts"`
@@ -49,7 +45,6 @@ type SiteStats struct {
 	DailyData    []DailyDatapoint `json:"daily_data"`
 }
 
-// DailyDatapoint represents statistics for a single day
 type DailyDatapoint struct {
 	Date                 string `json:"date"`
 	LikesPerDay          uint64 `json:"num_likes"`
@@ -62,7 +57,6 @@ type DailyDatapoint struct {
 	DailyActiveBlockers  uint64 `json:"num_blockers"`
 }
 
-// NewSearchService creates a new search service instance
 func NewSearchService(
 	ctx context.Context,
 	logger *slog.Logger,
@@ -81,7 +75,6 @@ func NewSearchService(
 		shutdownChan:   make(chan struct{}),
 	}
 
-	// Perform initial stats refresh
 	if err := ss.refreshStats(ctx); err != nil {
 		logger.Warn("failed initial stats refresh, will retry in background", "error", err)
 	} else {
@@ -93,22 +86,18 @@ func NewSearchService(
 	return ss, nil
 }
 
-// GetStats returns the cached stats, waiting if they're not ready yet
 func (ss *SearchService) GetStats(ctx context.Context, timeout time.Duration) (*SiteStats, error) {
 	ctx, span := tracer.Start(ctx, "GetStats")
 	defer span.End()
 
-	// Wait for stats to be ready with timeout
 	select {
 	case <-ss.statsReadyChan:
-		// Stats are ready
 	case <-time.After(timeout):
 		return nil, fmt.Errorf("timeout waiting for stats cache to populate")
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
 
-	// Read from cache
 	ss.statsCacheMux.RLock()
 	defer ss.statsCacheMux.RUnlock()
 
@@ -119,7 +108,6 @@ func (ss *SearchService) GetStats(ctx context.Context, timeout time.Duration) (*
 	return &ss.statsCache.Stats, nil
 }
 
-// StartStatsRefreshWorker starts the background stats refresh worker
 func (ss *SearchService) StartStatsRefreshWorker(ctx context.Context) {
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
@@ -147,19 +135,16 @@ func (ss *SearchService) StartStatsRefreshWorker(ctx context.Context) {
 	}
 }
 
-// refreshStats fetches fresh statistics and updates the cache
 func (ss *SearchService) refreshStats(ctx context.Context) error {
 	ctx, span := tracer.Start(ctx, "refreshStats")
 	defer span.End()
 
-	// Get usercount from UserCount service
 	userCount, err := ss.UserCount.GetUserCount(ctx)
 	if err != nil {
 		ss.Logger.Error("error getting user count", "error", err)
 		return fmt.Errorf("error getting user count: %w", err)
 	}
 
-	// Get daily stats from ClickHouse
 	dailyStats, err := ss.Store.GetDailyStats(ctx, 10000)
 	if err != nil {
 		return fmt.Errorf("error getting daily stats: %w", err)
@@ -168,7 +153,6 @@ func (ss *SearchService) refreshStats(ctx context.Context) error {
 	dailyDatapoints := []DailyDatapoint{}
 	var totalPosts, totalLikes, totalFollows uint64
 
-	// Filter and aggregate daily data
 	minDate := time.Date(2023, 3, 1, 0, 0, 0, 0, time.UTC)
 	maxDate := time.Now().AddDate(0, 0, 1)
 
@@ -194,13 +178,11 @@ func (ss *SearchService) refreshStats(ctx context.Context) error {
 		totalFollows += datapoint.FollowsPerDay
 	}
 
-	// Update metrics
 	totalUsersGauge.Set(float64(userCount))
 	totalPostsGauge.Set(float64(totalPosts))
 	totalLikesGauge.Set(float64(totalLikes))
 	totalFollowsGauge.Set(float64(totalFollows))
 
-	// Create new cache entry
 	newCache := &StatsCache{
 		Stats: SiteStats{
 			TotalUsers:   userCount,
@@ -214,12 +196,10 @@ func (ss *SearchService) refreshStats(ctx context.Context) error {
 		UpdatedAt:  time.Now(),
 	}
 
-	// Update cache
 	ss.statsCacheMux.Lock()
 	ss.statsCache = newCache
 	ss.statsCacheMux.Unlock()
 
-	// Signal that stats are ready (only once)
 	ss.statsReadyOnce.Do(func() {
 		close(ss.statsReadyChan)
 	})
@@ -235,7 +215,6 @@ func (ss *SearchService) refreshStats(ctx context.Context) error {
 	return nil
 }
 
-// Shutdown gracefully shuts down the search service
 func (ss *SearchService) Shutdown() error {
 	ss.shutdownOnce.Do(func() {
 		close(ss.shutdownChan)

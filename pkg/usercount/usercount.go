@@ -31,7 +31,6 @@ type UserCount struct {
 func NewUserCount(ctx context.Context, redisClient *redis.Client) *UserCount {
 	prefix := "usercount"
 
-	// Check for a prior cursor in redis
 	pdsList, err := redisClient.HGetAll(ctx, prefix+":pdslist").Result()
 	if err != nil {
 		if err != redis.Nil {
@@ -92,13 +91,11 @@ func NewUserCount(ctx context.Context, redisClient *redis.Client) *UserCount {
 	}
 }
 
-// HostStatus is a point-in-time view of a PDS in the scrape list.
 type HostStatus struct {
 	Host      string `json:"host"`
 	UserCount int    `json:"user_count"`
 }
 
-// Hosts returns a snapshot of the current scrape list.
 func (uc *UserCount) Hosts() []HostStatus {
 	uc.mu.RLock()
 	defer uc.mu.RUnlock()
@@ -244,7 +241,6 @@ func NewPDS(host string, rps int) *PDS {
 		ExpectContinueTimeout: 1 * time.Second,
 	})
 
-	// Create the XRPC Client
 	client := xrpc.Client{
 		Client: &http.Client{
 			Transport: instrumentedTransport,
@@ -259,10 +255,6 @@ func NewPDS(host string, rps int) *PDS {
 	}
 }
 
-// GetUserCount returns the number of users of BSky from the Repo Sync API
-// It uses a rate limiter to limit requests to 5 per second
-// It does not implement any caching, so it will make a series of requests to the API every time it is called
-// Caching should be implemented one layer up in the application
 func (uc *UserCount) GetUserCount(ctx context.Context) (int, error) {
 	ctx, span := otel.Tracer("usercount").Start(ctx, "GetUserCount")
 	defer span.End()
@@ -283,11 +275,6 @@ func (uc *UserCount) GetUserCount(ctx context.Context) (int, error) {
 		wg.Add(1)
 		go func(pds *PDS) {
 			defer wg.Done()
-
-			// Reset the cursor and counts every time
-			// pds.LastCursor = ""
-			// pds.UserCount = 0
-			// pds.LastPageSize = 0
 
 			for {
 				err := pds.Limiter.Wait(ctx)
@@ -345,7 +332,6 @@ func (uc *UserCount) GetUserCount(ctx context.Context) (int, error) {
 
 	uc.CurrentUserCount = totalUserCount
 
-	// Store the PDS list in redis
 	pdsList := map[string]any{}
 	for _, pds := range pdss {
 		pdsList[pds.Host] = fmt.Sprintf("%d|%d|%s", pds.UserCount, pds.LastPageSize, pds.LastCursor)
@@ -356,7 +342,6 @@ func (uc *UserCount) GetUserCount(ctx context.Context) (int, error) {
 		log.Printf("error setting pds list in redis: %s\n", err)
 	}
 
-	// Store the last user count in redis
 	err = uc.RedisClient.Set(ctx, uc.Prefix+":last_user_count", uc.CurrentUserCount, 0).Err()
 	if err != nil {
 		log.Printf("error setting last user count in redis: %s\n", err)

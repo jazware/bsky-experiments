@@ -48,7 +48,6 @@ func StartLogger(cctx *cli.Context, opts ...LoggingOption) *slog.Logger {
 	return l.logger
 }
 
-// LoggingOption is a functional option for configuring the Logger.
 type LoggingOption func(*Logging)
 
 // WithSource sets whether the logger should include source information.

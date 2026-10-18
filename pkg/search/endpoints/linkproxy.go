@@ -75,7 +75,6 @@ func (api *API) publicBaseURL(c echo.Context) string {
 	return c.Scheme() + "://" + c.Request().Host
 }
 
-// shouldServeEmbed decides between an OG preview page and a redirect
 func shouldServeEmbed(c echo.Context) bool {
 	if c.QueryParams().Has("embed") {
 		return true
@@ -98,7 +97,6 @@ func actorDisplayName(name *string, handle string) string {
 	return handle
 }
 
-// GetPostLinkProxy handles GET /profile/:ident/post/:rkey
 func (api *API) GetPostLinkProxy(c echo.Context) error {
 	ctx := c.Request().Context()
 	ctx, span := tracer.Start(ctx, "GetPostLinkProxy")
@@ -173,7 +171,6 @@ func (api *API) GetPostLinkProxy(c echo.Context) error {
 	return renderOGPage(c, &data)
 }
 
-// GetProfileLinkProxy handles GET /profile/:ident
 func (api *API) GetProfileLinkProxy(c echo.Context) error {
 	ctx := c.Request().Context()
 	ctx, span := tracer.Start(ctx, "GetProfileLinkProxy")
@@ -213,7 +210,6 @@ func (api *API) GetProfileLinkProxy(c echo.Context) error {
 	return renderOGPage(c, &data)
 }
 
-// GetPostCardImage handles GET /embed/post/:ident/:rkey/card.png
 func (api *API) GetPostCardImage(c echo.Context) error {
 	ctx := c.Request().Context()
 	ctx, span := tracer.Start(ctx, "GetPostCardImage")
@@ -274,7 +270,6 @@ type oEmbedResponse struct {
 	ProviderURL  string `json:"provider_url"`
 }
 
-// GetOEmbed handles GET /oembed?url=...
 func (api *API) GetOEmbed(c echo.Context) error {
 	ctx := c.Request().Context()
 	ctx, span := tracer.Start(ctx, "GetOEmbed")

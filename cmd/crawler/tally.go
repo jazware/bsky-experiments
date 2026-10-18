@@ -66,7 +66,6 @@ func runTally(cctx *cli.Context) error {
 	total := len(segments)
 	fmt.Printf("Scanning %d segments in %s ...\n\n", total, inputDir)
 
-	// Fan out segment reads to workers.
 	segCh := make(chan string)
 	resultCh := make(chan segmentTally, total)
 	var wg sync.WaitGroup
@@ -88,7 +87,6 @@ func runTally(cctx *cli.Context) error {
 		close(segCh)
 	}()
 
-	// Consume results as they arrive, printing progress.
 	results := make(map[string]segmentTally, total)
 	var runningRecords int64
 	for range total {
@@ -126,7 +124,6 @@ func runTally(cctx *cli.Context) error {
 		}
 	}
 
-	// Compute DID duplication stats.
 	uniqueDIDs := len(allDIDs)
 	var duplicatedDIDs int
 	var duplicateRepoInstances int
@@ -205,7 +202,6 @@ func formatCount(n int64) string {
 		return fmt.Sprintf("%d", n)
 	}
 	s := fmt.Sprintf("%d", n)
-	// Insert commas from the right.
 	var result []byte
 	for i, c := range s {
 		if i > 0 && (len(s)-i)%3 == 0 {

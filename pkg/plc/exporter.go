@@ -27,7 +27,6 @@ const (
 	MaxBackoff          = 60 * time.Second
 )
 
-// ExporterConfig contains configuration for the PLC exporter
 type ExporterConfig struct {
 	PLCHost      string
 	RateLimit    float64
@@ -37,7 +36,6 @@ type ExporterConfig struct {
 	Logger       *slog.Logger
 }
 
-// Exporter handles exporting PLC operations to ClickHouse
 type Exporter struct {
 	config       ExporterConfig
 	httpClient   *http.Client
@@ -53,7 +51,6 @@ type Exporter struct {
 	wg           sync.WaitGroup
 }
 
-// NewExporter creates a new PLC exporter
 func NewExporter(config ExporterConfig) (*Exporter, error) {
 	if config.RateLimit <= 0 {
 		config.RateLimit = DefaultRateLimit
@@ -73,7 +70,6 @@ func NewExporter(config ExporterConfig) (*Exporter, error) {
 		cancel:        cancel,
 	}
 
-	// Load cursor from Redis
 	if err := e.loadCursor(ctx); err != nil {
 		config.Logger.Warn("failed to load PLC cursor from Redis, starting from beginning", "error", err)
 	}
@@ -81,7 +77,6 @@ func NewExporter(config ExporterConfig) (*Exporter, error) {
 	return e, nil
 }
 
-// Run starts the exporter main loop
 func (e *Exporter) Run() {
 	e.wg.Add(1)
 	defer e.wg.Done()
@@ -100,7 +95,6 @@ func (e *Exporter) Run() {
 		default:
 		}
 
-		// Rate limit
 		if err := e.rateLimiter.Wait(e.ctx); err != nil {
 			if e.ctx.Err() != nil {
 				return
@@ -109,14 +103,12 @@ func (e *Exporter) Run() {
 			continue
 		}
 
-		// Fetch and process a page
 		count, err := e.fetchAndProcessPage(e.ctx)
 		if err != nil {
 			consecutiveErrors++
 			fetchErrorsCounter.Inc()
 			logger.Error("failed to fetch PLC page", "error", err, "consecutive_errors", consecutiveErrors)
 
-			// Exponential backoff
 			if consecutiveErrors >= MaxRetries {
 				logger.Error("max retries exceeded, backing off", "backoff", backoff)
 				select {
@@ -129,11 +121,9 @@ func (e *Exporter) Run() {
 			continue
 		}
 
-		// Reset backoff on success
 		consecutiveErrors = 0
 		backoff = InitialBackoff
 
-		// If we got fewer than expected, we're caught up - wait before polling again
 		if count < DefaultPageSize {
 			logger.Debug("caught up with PLC, waiting before next poll", "count", count)
 			select {
@@ -147,7 +137,6 @@ func (e *Exporter) Run() {
 	}
 }
 
-// fetchAndProcessPage fetches a page of PLC operations and processes them
 func (e *Exporter) fetchAndProcessPage(ctx context.Context) (int, error) {
 	ctx, span := tracer.Start(ctx, "fetchAndProcessPage")
 	defer span.End()
@@ -186,7 +175,6 @@ func (e *Exporter) fetchAndProcessPage(ctx context.Context) (int, error) {
 		return 0, fmt.Errorf("unexpected status %d: %s", resp.StatusCode, string(body))
 	}
 
-	// Parse newline-delimited JSON
 	count := 0
 	var lastOp *PLCOperation
 	scanner := bufio.NewScanner(resp.Body)
@@ -204,11 +192,9 @@ func (e *Exporter) fetchAndProcessPage(ctx context.Context) (int, error) {
 			continue
 		}
 
-		// Extract handle and PDS from operation
 		handle, pds := ExtractHandleAndPDS(&op)
 		opType := GetOperationType(&op)
 
-		// Add to batch
 		e.batchInserter.Add(&PLCBatch{
 			DID:           op.DID,
 			OperationType: opType,
@@ -228,13 +214,11 @@ func (e *Exporter) fetchAndProcessPage(ctx context.Context) (int, error) {
 		return count, fmt.Errorf("error reading response: %w", err)
 	}
 
-	// Update cursor to last operation's createdAt
 	if lastOp != nil {
 		newCursor := lastOp.CreatedAt.Format(time.RFC3339Nano)
 		e.setCursor(newCursor)
 		cursorGauge.Set(float64(lastOp.CreatedAt.Unix()))
 
-		// Persist cursor to Redis
 		if err := e.saveCursor(ctx); err != nil {
 			e.config.Logger.Error("failed to save PLC cursor to Redis", "error", err)
 		}
@@ -243,21 +227,18 @@ func (e *Exporter) fetchAndProcessPage(ctx context.Context) (int, error) {
 	return count, nil
 }
 
-// getCursor returns the current cursor
 func (e *Exporter) getCursor() string {
 	e.cursorMu.RLock()
 	defer e.cursorMu.RUnlock()
 	return e.cursor
 }
 
-// setCursor sets the current cursor
 func (e *Exporter) setCursor(cursor string) {
 	e.cursorMu.Lock()
 	defer e.cursorMu.Unlock()
 	e.cursor = cursor
 }
 
-// loadCursor loads the cursor from Redis
 func (e *Exporter) loadCursor(ctx context.Context) error {
 	cursor, err := e.config.RedisClient.Get(ctx, e.cursorKey).Result()
 	if err != nil {
@@ -271,7 +252,6 @@ func (e *Exporter) loadCursor(ctx context.Context) error {
 	return nil
 }
 
-// saveCursor saves the cursor to Redis
 func (e *Exporter) saveCursor(ctx context.Context) error {
 	cursor := e.getCursor()
 	if cursor == "" {
@@ -280,20 +260,15 @@ func (e *Exporter) saveCursor(ctx context.Context) error {
 	return e.config.RedisClient.Set(ctx, e.cursorKey, cursor, 0).Err()
 }
 
-// Shutdown gracefully shuts down the exporter
 func (e *Exporter) Shutdown() {
 	e.config.Logger.Info("shutting down PLC exporter")
 
-	// Cancel context to stop main loop
 	e.cancel()
 
-	// Wait for main loop to finish
 	e.wg.Wait()
 
-	// Shutdown batch inserter (flushes remaining batches)
 	e.batchInserter.Shutdown()
 
-	// Save final cursor
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := e.saveCursor(ctx); err != nil {

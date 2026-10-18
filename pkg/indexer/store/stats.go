@@ -8,7 +8,6 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 )
 
-// DailyStatsRow represents a daily statistics summary
 type DailyStatsRow struct {
 	Date                 time.Time
 	LikesPerDay          uint64

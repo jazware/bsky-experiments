@@ -8,7 +8,6 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 )
 
-// RepoCleanupJob represents a repo cleanup job
 type RepoCleanupJob struct {
 	JobID           string     `json:"job_id"`
 	Repo            string     `json:"repo"`
@@ -24,7 +23,6 @@ type RepoCleanupJob struct {
 	LastDeletedAt   *time.Time `json:"last_deleted_at"`
 }
 
-// UpsertRepoCleanupJob creates or updates a repo cleanup job
 func (s *Store) UpsertRepoCleanupJob(ctx context.Context, job RepoCleanupJob) (result *RepoCleanupJob, err error) {
 	_, done := observe(ctx, "exec", &err,
 		attribute.String("job.id", job.JobID),
@@ -64,7 +62,6 @@ func (s *Store) UpsertRepoCleanupJob(ctx context.Context, job RepoCleanupJob) (r
 	return &job, nil
 }
 
-// GetRepoCleanupJob retrieves a specific cleanup job by ID
 func (s *Store) GetRepoCleanupJob(ctx context.Context, jobID string) (job *RepoCleanupJob, err error) {
 	ctx, done := observe(ctx, "query_row", &err,
 		attribute.String("job.id", jobID))
@@ -103,7 +100,11 @@ func (s *Store) GetRepoCleanupJob(ctx context.Context, jobID string) (job *RepoC
 	return job, nil
 }
 
-// GetCleanupJobsByRepo retrieves cleanup jobs for a specific repo
+// The table is a ReplacingMergeTree keyed by job_id: every update is a new
+// row, and old versions stay visible until a merge. GetCleanupJobsByRepo and
+// the GetRunningCleanupJobs queries take each job's latest row before
+// filtering, or a finished job's older "running" row brings it back with a
+// refresh token that's been revoked.
 func (s *Store) GetCleanupJobsByRepo(ctx context.Context, repo string, limit int) (jobs []RepoCleanupJob, err error) {
 	ctx, done := observe(ctx, "query", &err,
 		attribute.String("repo", repo),
@@ -111,13 +112,17 @@ func (s *Store) GetCleanupJobsByRepo(ctx context.Context, repo string, limit int
 	defer func() { done(attribute.Int("result.count", len(jobs))) }()
 
 	query := `
-		SELECT
-			job_id, repo, refresh_token, cleanup_types, delete_older_than,
-			num_deleted, num_deleted_today, est_num_remaining, job_state,
-			created_at, updated_at, last_deleted_at
-		FROM repo_cleanup_jobs
-		WHERE repo = ?
-		ORDER BY updated_at DESC, time_us DESC
+		SELECT * FROM (
+			SELECT
+				job_id, repo, refresh_token, cleanup_types, delete_older_than,
+				num_deleted, num_deleted_today, est_num_remaining, job_state,
+				created_at, updated_at, last_deleted_at
+			FROM repo_cleanup_jobs
+			WHERE repo = ?
+			ORDER BY time_us DESC
+			LIMIT 1 BY job_id
+		)
+		ORDER BY updated_at DESC
 		LIMIT ?
 	`
 
@@ -154,20 +159,24 @@ func (s *Store) GetCleanupJobsByRepo(ctx context.Context, repo string, limit int
 	return jobs, nil
 }
 
-// GetRunningCleanupJobsByRepo retrieves running cleanup jobs for a specific repo
 func (s *Store) GetRunningCleanupJobsByRepo(ctx context.Context, repo string) (jobs []RepoCleanupJob, err error) {
 	ctx, done := observe(ctx, "query", &err,
 		attribute.String("repo", repo))
 	defer func() { done(attribute.Int("result.count", len(jobs))) }()
 
 	query := `
-		SELECT
-			job_id, repo, refresh_token, cleanup_types, delete_older_than,
-			num_deleted, num_deleted_today, est_num_remaining, job_state,
-			created_at, updated_at, last_deleted_at
-		FROM repo_cleanup_jobs
-		WHERE repo = ? AND job_state = 'running'
-		ORDER BY updated_at DESC, time_us DESC
+		SELECT * FROM (
+			SELECT
+				job_id, repo, refresh_token, cleanup_types, delete_older_than,
+				num_deleted, num_deleted_today, est_num_remaining, job_state,
+				created_at, updated_at, last_deleted_at
+			FROM repo_cleanup_jobs
+			WHERE repo = ?
+			ORDER BY time_us DESC
+			LIMIT 1 BY job_id
+		)
+		WHERE job_state = 'running'
+		ORDER BY updated_at DESC
 	`
 
 	rows, err := s.DB.Query(ctx, query, repo)
@@ -203,20 +212,23 @@ func (s *Store) GetRunningCleanupJobsByRepo(ctx context.Context, repo string) (j
 	return jobs, nil
 }
 
-// GetRunningCleanupJobs retrieves running cleanup jobs (limited)
 func (s *Store) GetRunningCleanupJobs(ctx context.Context, limit int) (jobs []RepoCleanupJob, err error) {
 	ctx, done := observe(ctx, "query", &err,
 		attribute.Int("limit", limit))
 	defer func() { done(attribute.Int("result.count", len(jobs))) }()
 
 	query := `
-		SELECT
-			job_id, repo, refresh_token, cleanup_types, delete_older_than,
-			num_deleted, num_deleted_today, est_num_remaining, job_state,
-			created_at, updated_at, last_deleted_at
-		FROM repo_cleanup_jobs
+		SELECT * FROM (
+			SELECT
+				job_id, repo, refresh_token, cleanup_types, delete_older_than,
+				num_deleted, num_deleted_today, est_num_remaining, job_state,
+				created_at, updated_at, last_deleted_at
+			FROM repo_cleanup_jobs
+			ORDER BY time_us DESC
+			LIMIT 1 BY job_id
+		)
 		WHERE job_state = 'running'
-		ORDER BY updated_at ASC, time_us DESC
+		ORDER BY updated_at ASC
 		LIMIT ?
 	`
 
@@ -253,14 +265,12 @@ func (s *Store) GetRunningCleanupJobs(ctx context.Context, limit int) (jobs []Re
 	return jobs, nil
 }
 
-// CleanupStats represents aggregated cleanup statistics
 type CleanupStats struct {
 	TotalNumDeleted int64  `json:"total_num_deleted"`
 	NumJobs         uint64 `json:"num_jobs"`
 	NumRepos        uint64 `json:"num_repos"`
 }
 
-// GetCleanupStats retrieves aggregate cleanup statistics
 func (s *Store) GetCleanupStats(ctx context.Context) (stats *CleanupStats, err error) {
 	ctx, done := observe(ctx, "query_row", &err)
 	defer done()
@@ -286,10 +296,7 @@ func (s *Store) GetCleanupStats(ctx context.Context) (stats *CleanupStats, err e
 	return stats, nil
 }
 
-// DeleteRepoCleanupJob deletes a cleanup job (soft delete via inserting new version with deleted state)
 func (s *Store) DeleteRepoCleanupJob(ctx context.Context, jobID string) error {
-	// For ClickHouse ReplacingMergeTree, we can't truly delete, so we mark as deleted
-	// by inserting a new version with a special state or just skip implementation
-	// For now, we'll just leave this as a no-op or you could insert a tombstone record
+	// ReplacingMergeTree rows can't be deleted; this is a deliberate no-op.
 	return nil
 }

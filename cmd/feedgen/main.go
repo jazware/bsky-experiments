@@ -107,20 +107,16 @@ func FeedGenerator(cctx *cli.Context) error {
 	ctx, cancel := context.WithCancel(cctx.Context)
 	defer cancel()
 
-	// Setup signal handlers
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
 
-	// Initialize logger
 	logger := telemetry.StartLogger(cctx)
 	logger.Info("starting feed generator",
 		"version", version.Version,
 		"commit", version.GitCommit)
 
-	// Initialize metrics
 	telemetry.StartMetrics(cctx)
 
-	// Initialize tracing if configured
 	if os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT") != "" {
 		logger.Info("initializing tracer")
 		shutdown, err := telemetry.StartTracing(cctx)
@@ -139,7 +135,6 @@ func FeedGenerator(cctx *cli.Context) error {
 		return err
 	}
 
-	// Connect to ClickHouse
 	logger.Info("connecting to clickhouse", "address", cctx.String("clickhouse-address"))
 	chStore, err := store.NewStore(
 		cctx.String("clickhouse-address"),
@@ -152,23 +147,19 @@ func FeedGenerator(cctx *cli.Context) error {
 	defer chStore.Close()
 	logger.Info("connected to clickhouse")
 
-	// Create batch inserter for analytics
 	logger.Info("creating batch inserter")
 	batchInserter := store.NewBatchInserter(chStore, logger)
 	defer batchInserter.Shutdown()
 
-	// Connect to Redis
 	logger.Info("connecting to redis", "address", cctx.String("redis-address"))
 	redisClient := redis.NewClient(&redis.Options{
 		Addr: cctx.String("redis-address"),
 	})
 
-	// Enable tracing instrumentation for Redis
 	if err := redisotel.InstrumentTracing(redisClient); err != nil {
 		return fmt.Errorf("failed to instrument redis with tracing: %w", err)
 	}
 
-	// Test the connection to redis
 	_, err = redisClient.Ping(ctx).Result()
 	if err != nil {
 		return fmt.Errorf("failed to connect to redis: %w", err)
@@ -177,7 +168,6 @@ func FeedGenerator(cctx *cli.Context) error {
 
 	feedActorDID := cctx.String("feed-actor-did")
 
-	// Set the acceptable DIDs for the feed generator to respond to
 	serviceURL, err := url.Parse(cctx.String("service-endpoint"))
 	if err != nil {
 		return fmt.Errorf("error parsing service endpoint: %w", err)
@@ -198,7 +188,6 @@ func FeedGenerator(cctx *cli.Context) error {
 		return fmt.Errorf("failed to create Endpoints: %w", err)
 	}
 
-	// Create feeds
 	logger.Info("initializing hot feed")
 	hotFeed, hotFeedAliases, err := hot.NewFeed(ctx, feedActorDID, chStore, redisClient)
 	if err != nil {
@@ -220,15 +209,12 @@ func FeedGenerator(cctx *cli.Context) error {
 	}
 	feedGenerator.AddFeed(staticFeedAliases, staticFeed)
 
-	// Setup Echo router
 	e := echo.New()
 	e.HideBanner = true
 	e.HidePort = true
 
-	// Recovery middleware
 	e.Use(middleware.Recover())
 
-	// Structured logging middleware with custom attributes
 	e.Use(slogecho.NewWithConfig(
 		logger,
 		slogecho.Config{
@@ -244,11 +230,9 @@ func FeedGenerator(cctx *cli.Context) error {
 		},
 	))
 
-	// Serve static files from the public folder
 	e.Static("/public", "./public")
 	e.Static("/assets", "./public/assets")
 
-	// OTEL Middleware
 	e.Use(otelecho.Middleware(
 		"feed-generator",
 		otelecho.WithSkipper(func(c echo.Context) bool {
@@ -256,7 +240,6 @@ func FeedGenerator(cctx *cli.Context) error {
 		}),
 	))
 
-	// CORS middleware
 	corsHosts := cctx.StringSlice("cors-allowed-hosts")
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
 		AllowOrigins: []string{"https://bsky.jazco.dev"},
@@ -271,14 +254,12 @@ func FeedGenerator(cctx *cli.Context) error {
 		},
 	}))
 
-	// Prometheus metrics endpoint
 	e.GET("/metrics", echo.WrapHandler(promhttp.Handler()))
 
 	// ClickHouse and Redis answered before the router existed, so serving at
 	// all is what yeet's gate needs to know.
 	e.GET("/healthz", func(c echo.Context) error { return c.String(http.StatusOK, "ok") })
 
-	// Init auth provider
 	storeProvider := auth.NewStoreProvider(chStore)
 
 	auther, err := auth.NewAuth(
@@ -292,16 +273,13 @@ func FeedGenerator(cctx *cli.Context) error {
 		return fmt.Errorf("failed to create Auth: %w", err)
 	}
 
-	// Public routes (no auth)
 	e.GET("/.well-known/did.json", endpoints.GetWellKnownDID)
 
-	// JWT Auth middleware for feed routes
 	jwtGroup := e.Group("")
 	jwtGroup.Use(auther.AuthenticateRequestViaJWT)
 	jwtGroup.GET("/xrpc/app.bsky.feed.getFeedSkeleton", endpoints.GetFeedSkeleton)
 	jwtGroup.GET("/xrpc/app.bsky.feed.describeFeedGenerator", endpoints.DescribeFeedGenerator)
 
-	// Admin API routes (protected by API Key) - new paths for dashboard
 	adminAPIGroup := e.Group("/api/admin")
 	adminAPIGroup.Use(auther.AuthenticateRequestViaAPIKey)
 	adminAPIGroup.GET("/feeds", endpoints.GetFeeds)
@@ -309,21 +287,18 @@ func FeedGenerator(cctx *cli.Context) error {
 	adminAPIGroup.PUT("/feed_members", endpoints.AssignUserToFeed)
 	adminAPIGroup.DELETE("/feed_members", endpoints.UnassignUserFromFeed)
 
-	// Legacy API Key Auth routes (keep for backwards compatibility)
 	legacyAPIKeyGroup := e.Group("")
 	legacyAPIKeyGroup.Use(auther.AuthenticateRequestViaAPIKey)
 	legacyAPIKeyGroup.PUT("/assign_user_to_feed", endpoints.AssignUserToFeed)
 	legacyAPIKeyGroup.PUT("/unassign_user_from_feed", endpoints.UnassignUserFromFeed)
 	legacyAPIKeyGroup.GET("/feed_members", endpoints.GetFeedMembers)
 
-	// Dashboard routes (embedded SPA)
 	dashboardHandler := feedgenerator.NewDashboardHandler()
 	e.GET("/dashboard", func(c echo.Context) error {
 		return c.Redirect(http.StatusFound, "/dashboard/")
 	})
 	e.GET("/dashboard/*", dashboardHandler.ServeHTTP)
 
-	// Start HTTP server in a goroutine
 	serverErr := make(chan error, 1)
 
 	go func() {
@@ -333,7 +308,6 @@ func FeedGenerator(cctx *cli.Context) error {
 		}
 	}()
 
-	// Wait for shutdown signal or error
 	select {
 	case <-signals:
 		logger.Info("shutting down on signal")
@@ -346,7 +320,6 @@ func FeedGenerator(cctx *cli.Context) error {
 
 	logger.Info("beginning graceful shutdown")
 
-	// Force shutdown after timeout
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
 

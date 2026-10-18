@@ -40,7 +40,6 @@ func runInspect(cctx *cli.Context) error {
 	fmt.Printf("  Index Offset: %d\n", header.IndexOffset)
 	fmt.Println()
 
-	// Load index for summary.
 	index, err := repoarchive.LoadIndex(path)
 	if err != nil {
 		fmt.Printf("  (index not readable: %v)\n", err)
@@ -48,7 +47,6 @@ func runInspect(cctx *cli.Context) error {
 		fmt.Printf("  Index Entries: %d\n", len(index.Entries))
 	}
 
-	// Scan repos and summarize collections.
 	collectionStats := make(map[string]struct {
 		repos   int
 		records int
@@ -76,7 +74,6 @@ func runInspect(cctx *cli.Context) error {
 	fmt.Printf("\n  Repos scanned: %d\n", repoCount)
 	fmt.Println("  Collections:")
 
-	// Sort collection names for display.
 	names := make([]string, 0, len(collectionStats))
 	for name := range collectionStats {
 		names = append(names, name)

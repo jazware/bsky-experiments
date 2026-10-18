@@ -19,7 +19,6 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 )
 
-// Indexer is the indexer for the firehose
 type Indexer struct {
 	SocketURL string
 	Progress  *Progress
@@ -32,7 +31,6 @@ type Indexer struct {
 	BatchInserter *store.BatchInserter
 }
 
-// Progress is the cursor for the indexer
 type Progress struct {
 	LastSeq            int64     `json:"last_seq"`
 	LastSeqProcessedAt time.Time `json:"last_seq_processed_at"`
@@ -54,7 +52,6 @@ func (p *Progress) Get() (int64, time.Time) {
 
 var tracer = otel.Tracer("indexer")
 
-// NewIndexer creates a new indexer
 func NewIndexer(
 	ctx context.Context,
 	logger *slog.Logger,
@@ -77,7 +74,6 @@ func NewIndexer(
 		BatchInserter: batchInserter,
 	}
 
-	// Check to see if the cursor exists in redis
 	err := i.ReadCursor(context.Background())
 	if err != nil {
 		if !strings.Contains(err.Error(), "redis: nil") {
@@ -89,7 +85,6 @@ func NewIndexer(
 	return i, nil
 }
 
-// WriteCursor writes the cursor to redis
 func (i *Indexer) WriteCursor(ctx context.Context) error {
 	ctx, span := tracer.Start(ctx, "WriteCursor")
 	defer span.End()
@@ -112,7 +107,6 @@ func (i *Indexer) WriteCursor(ctx context.Context) error {
 	return nil
 }
 
-// ReadCursor reads the cursor from redis
 func (i *Indexer) ReadCursor(ctx context.Context) error {
 	ctx, span := tracer.Start(ctx, "ReadCursor")
 	defer span.End()
@@ -130,13 +124,11 @@ func (i *Indexer) ReadCursor(ctx context.Context) error {
 	return nil
 }
 
-// Shutdown shuts down the indexer
 func (i *Indexer) Shutdown() error {
 	i.BatchInserter.Shutdown()
 	return i.Store.Close()
 }
 
-// OnEvent handles a stream event from the Jetstream firehose
 func (i *Indexer) OnEvent(ctx context.Context, evt *models.Event) error {
 	ctx, span := tracer.Start(ctx, "HandleStreamEvent")
 	defer span.End()
@@ -158,7 +150,6 @@ func (i *Indexer) OnEvent(ctx context.Context, evt *models.Event) error {
 	return nil
 }
 
-// OnCommit handles a repo commit event from the firehose
 func (i *Indexer) OnCommit(ctx context.Context, evt *models.Event) error {
 	ctx, span := tracer.Start(ctx, "OnCommit")
 	defer span.End()
@@ -204,7 +195,6 @@ func (i *Indexer) OnCommit(ctx context.Context, evt *models.Event) error {
 	return nil
 }
 
-// HandleCreateRecord handles a create record event
 func (i *Indexer) HandleCreateRecord(
 	ctx context.Context,
 	repo string,
@@ -219,14 +209,12 @@ func (i *Indexer) HandleCreateRecord(
 
 	recordsProcessedCounter.WithLabelValues("create", collection, i.SocketURL).Inc()
 
-	// Strip CIDs from record JSON for better ClickHouse compression
 	strippedJSON, err := StripCIDs(rec)
 	if err != nil {
 		i.Logger.Warn("failed to strip CIDs from record", "error", err, "collection", collection, "rkey", rkey)
 		strippedJSON = rec
 	}
 
-	// Store the record in repo_records
 	i.BatchInserter.AddRecord(&store.RecordBatch{
 		Repo:       repo,
 		Collection: collection,
@@ -237,7 +225,6 @@ func (i *Indexer) HandleCreateRecord(
 		TimeUS:     timeUS,
 	})
 
-	// Handle specialized tables
 	switch collection {
 	case "app.bsky.graph.follow":
 		var follow bsky.GraphFollow
@@ -350,22 +337,18 @@ func (i *Indexer) HandleCreateRecord(
 			createdAt = eventTime
 		}
 
-		// Extract text
 		text := post.Text
 
-		// Extract languages
 		langs := []string{}
 		if post.Langs != nil {
 			langs = post.Langs
 		}
 
-		// Check for embedded media
 		hasEmbeddedMedia := uint8(0)
 		if post.Embed != nil {
 			if post.Embed.EmbedImages != nil || post.Embed.EmbedVideo != nil {
 				hasEmbeddedMedia = 1
 			}
-			// Check for record with media
 			if post.Embed.EmbedRecordWithMedia != nil && post.Embed.EmbedRecordWithMedia.Media != nil {
 				if post.Embed.EmbedRecordWithMedia.Media.EmbedImages != nil || post.Embed.EmbedRecordWithMedia.Media.EmbedVideo != nil {
 					hasEmbeddedMedia = 1
@@ -373,7 +356,6 @@ func (i *Indexer) HandleCreateRecord(
 			}
 		}
 
-		// Extract parent and root URIs
 		parentURI := ""
 		rootURI := ""
 		if post.Reply != nil {
@@ -405,7 +387,6 @@ func (i *Indexer) HandleCreateRecord(
 	return nil
 }
 
-// HandleUpdateRecord handles an update record event
 func (i *Indexer) HandleUpdateRecord(
 	ctx context.Context,
 	repo string,
@@ -420,14 +401,12 @@ func (i *Indexer) HandleUpdateRecord(
 
 	recordsProcessedCounter.WithLabelValues("update", collection, i.SocketURL).Inc()
 
-	// Strip CIDs from record JSON for better ClickHouse compression
 	strippedJSON, err := StripCIDs(rec)
 	if err != nil {
 		i.Logger.Warn("failed to strip CIDs from record", "error", err, "collection", collection, "rkey", rkey)
 		strippedJSON = rec
 	}
 
-	// Store the updated record in repo_records
 	i.BatchInserter.AddRecord(&store.RecordBatch{
 		Repo:       repo,
 		Collection: collection,
@@ -441,7 +420,6 @@ func (i *Indexer) HandleUpdateRecord(
 	return nil
 }
 
-// HandleDeleteRecord handles a delete record event
 func (i *Indexer) HandleDeleteRecord(
 	ctx context.Context,
 	repo string,
@@ -455,7 +433,6 @@ func (i *Indexer) HandleDeleteRecord(
 
 	recordsProcessedCounter.WithLabelValues("delete", collection, i.SocketURL).Inc()
 
-	// Store the deletion as a record with delete operation
 	i.BatchInserter.AddRecord(&store.RecordBatch{
 		Repo:       repo,
 		Collection: collection,

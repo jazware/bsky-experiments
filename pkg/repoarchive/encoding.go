@@ -7,9 +7,6 @@ import (
 	"io"
 )
 
-// Binary encoding helpers for the .rca format. All multi-byte integers are little-endian.
-
-// writeUint16 writes a uint16 in little-endian.
 func writeUint16(w io.Writer, v uint16) error {
 	var buf [2]byte
 	binary.LittleEndian.PutUint16(buf[:], v)
@@ -17,7 +14,6 @@ func writeUint16(w io.Writer, v uint16) error {
 	return err
 }
 
-// writeUint32 writes a uint32 in little-endian.
 func writeUint32(w io.Writer, v uint32) error {
 	var buf [4]byte
 	binary.LittleEndian.PutUint32(buf[:], v)
@@ -25,7 +21,6 @@ func writeUint32(w io.Writer, v uint32) error {
 	return err
 }
 
-// writeInt64 writes an int64 in little-endian.
 func writeInt64(w io.Writer, v int64) error {
 	var buf [8]byte
 	binary.LittleEndian.PutUint64(buf[:], uint64(v))
@@ -33,7 +28,6 @@ func writeInt64(w io.Writer, v int64) error {
 	return err
 }
 
-// writeLenPrefixed writes a uint16 length-prefixed byte slice.
 func writeLenPrefixed(w io.Writer, data []byte) error {
 	if len(data) > 65535 {
 		return fmt.Errorf("data too long for uint16 length prefix: %d", len(data))
@@ -45,7 +39,6 @@ func writeLenPrefixed(w io.Writer, data []byte) error {
 	return err
 }
 
-// writeLenPrefixed32 writes a uint32 length-prefixed byte slice.
 func writeLenPrefixed32(w io.Writer, data []byte) error {
 	if err := writeUint32(w, uint32(len(data))); err != nil {
 		return err
@@ -54,7 +47,6 @@ func writeLenPrefixed32(w io.Writer, data []byte) error {
 	return err
 }
 
-// readUint16 reads a uint16 in little-endian.
 func readUint16(r io.Reader) (uint16, error) {
 	var buf [2]byte
 	if _, err := io.ReadFull(r, buf[:]); err != nil {
@@ -63,7 +55,6 @@ func readUint16(r io.Reader) (uint16, error) {
 	return binary.LittleEndian.Uint16(buf[:]), nil
 }
 
-// readUint32 reads a uint32 in little-endian.
 func readUint32(r io.Reader) (uint32, error) {
 	var buf [4]byte
 	if _, err := io.ReadFull(r, buf[:]); err != nil {
@@ -72,7 +63,6 @@ func readUint32(r io.Reader) (uint32, error) {
 	return binary.LittleEndian.Uint32(buf[:]), nil
 }
 
-// readInt64 reads an int64 in little-endian.
 func readInt64(r io.Reader) (int64, error) {
 	var buf [8]byte
 	if _, err := io.ReadFull(r, buf[:]); err != nil {
@@ -81,7 +71,6 @@ func readInt64(r io.Reader) (int64, error) {
 	return int64(binary.LittleEndian.Uint64(buf[:])), nil
 }
 
-// readLenPrefixed reads a uint16-length-prefixed byte slice.
 func readLenPrefixed(r io.Reader) ([]byte, error) {
 	length, err := readUint16(r)
 	if err != nil {
@@ -94,7 +83,6 @@ func readLenPrefixed(r io.Reader) ([]byte, error) {
 	return buf, nil
 }
 
-// readLenPrefixed32 reads a uint32-length-prefixed byte slice.
 func readLenPrefixed32(r io.Reader) ([]byte, error) {
 	length, err := readUint32(r)
 	if err != nil {
@@ -107,7 +95,6 @@ func readLenPrefixed32(r io.Reader) ([]byte, error) {
 	return buf, nil
 }
 
-// writeFileHeader writes a FileHeader to the writer.
 func writeFileHeader(w io.Writer, h *FileHeader) error {
 	if _, err := w.Write(h.Magic[:]); err != nil {
 		return err
@@ -131,7 +118,6 @@ func writeFileHeader(w io.Writer, h *FileHeader) error {
 	return err
 }
 
-// readFileHeader reads a FileHeader from the reader.
 func readFileHeader(r io.Reader) (*FileHeader, error) {
 	h := &FileHeader{}
 	if _, err := io.ReadFull(r, h.Magic[:]); err != nil {
@@ -170,7 +156,6 @@ func readFileHeader(r io.Reader) (*FileHeader, error) {
 	return h, nil
 }
 
-// writeFileFooter writes a FileFooter to the writer.
 func writeFileFooter(w io.Writer, f *FileFooter) error {
 	if err := writeInt64(w, f.IndexOffset); err != nil {
 		return err
@@ -191,7 +176,6 @@ func writeFileFooter(w io.Writer, f *FileFooter) error {
 	return err
 }
 
-// readFileFooter reads a FileFooter from the reader.
 func readFileFooter(r io.Reader) (*FileFooter, error) {
 	f := &FileFooter{}
 	var err error
@@ -223,7 +207,6 @@ func readFileFooter(r io.Reader) (*FileFooter, error) {
 	return f, nil
 }
 
-// checksumCRC32 computes CRC32 (IEEE) of the given data.
 func checksumCRC32(data []byte) uint32 {
 	return crc32.ChecksumIEEE(data)
 }

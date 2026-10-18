@@ -22,7 +22,6 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-// WorkerPool manages a pool of crawl workers.
 type WorkerPool struct {
 	workQueue    chan *CrawlTask
 	repoQueue    chan *repoarchive.SerializedRepo
@@ -37,7 +36,6 @@ type WorkerPool struct {
 	cancel       context.CancelFunc
 }
 
-// NewWorkerPool creates and starts a pool of crawl workers.
 func NewWorkerPool(
 	numWorkers int,
 	repoQueue chan *repoarchive.SerializedRepo,
@@ -94,12 +92,10 @@ func NewWorkerPool(
 	return wp
 }
 
-// WorkQueue returns the channel to send CrawlTasks to.
 func (wp *WorkerPool) WorkQueue() chan<- *CrawlTask {
 	return wp.workQueue
 }
 
-// Stop signals workers to drain and waits for them to finish.
 func (wp *WorkerPool) Stop() {
 	close(wp.workQueue)
 	wp.wg.Wait()
@@ -149,7 +145,6 @@ func (wp *WorkerPool) processTask(ctx context.Context, logger *slog.Logger, task
 	repoCollections.Observe(float64(collectionCount))
 
 	if wp.config.Direct {
-		// Direct mode: send CrawledRepo straight to ClickHouse writer.
 		reposProcessedTotal.WithLabelValues("success").Inc()
 		select {
 		case wp.crawledQueue <- crawled:
@@ -158,7 +153,6 @@ func (wp *WorkerPool) processTask(ctx context.Context, logger *slog.Logger, task
 			return
 		}
 	} else {
-		// Archive mode: serialize + compress, then send to segment writer.
 		enc := wp.encoderPool.Get().(*zstd.Encoder)
 		sr, err := repoarchive.SerializeRepoBlock(enc, crawled)
 		wp.encoderPool.Put(enc)
@@ -236,7 +230,6 @@ func (wp *WorkerPool) fetchAndParseRepo(ctx context.Context, logger *slog.Logger
 			Err: fmt.Errorf("unexpected status: %s", resp.Status)}
 	}
 
-	// Cap body reading to prevent OOM.
 	maxBytes := int64(wp.config.MaxRepoSizeMB) * 1024 * 1024
 	limitedBody := io.LimitReader(resp.Body, maxBytes+1)
 
@@ -247,7 +240,6 @@ func (wp *WorkerPool) fetchAndParseRepo(ctx context.Context, logger *slog.Logger
 
 	rev := r.Rev
 
-	// Iterate all records, group by collection, marshal to JSON, strip CIDs.
 	collections := make(map[string][]repoarchive.Record, 16)
 	recordCount := 0
 
@@ -301,7 +293,6 @@ func classifyNetworkError(err error, task *CrawlTask) *RepoError {
 	return &RepoError{Category: category, DID: task.DID, PDS: task.PDS, Err: err}
 }
 
-// RepoError represents a categorized error during repo processing.
 type RepoError struct {
 	Code     int
 	Category string // "not_found", "deactivated", "takendown", "rate_limited", "http_error", "dns_error", "unavailable", "parse_error", "timeout"
@@ -348,14 +339,12 @@ func (wp *WorkerPool) handleError(ctx context.Context, logger *slog.Logger, task
 
 	reposProcessedTotal.WithLabelValues(repoErr.Category).Inc()
 
-	// Report PDS-level errors to the dispatcher for blocking decisions.
 	if isPDSError(repoErr.Category) {
 		wp.dispatcher.ReportResult(task.PDS, false)
 	}
 
 	switch repoErr.Category {
 	case "not_found", "deactivated", "takendown":
-		// Permanent per-repo failures — skip.
 		logger.Debug("skipping repo", "did", task.DID, "reason", repoErr.Category)
 		wp.progress.MarkFailed(task.DID, repoErr.Category)
 	case "parse_error":

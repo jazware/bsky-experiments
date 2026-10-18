@@ -27,7 +27,6 @@ func StripCIDs(data []byte) ([]byte, error) {
 	return json.Marshal(stripped)
 }
 
-// stripCIDsRecursive walks the JSON structure and removes CID fields.
 func stripCIDsRecursive(v any) any {
 	switch val := v.(type) {
 	case map[string]any:
@@ -48,7 +47,6 @@ func stripCIDsRecursive(v any) any {
 		return result
 
 	default:
-		// Primitive types (string, number, bool, null) - return as-is
 		return val
 	}
 }

@@ -8,7 +8,6 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 )
 
-// HotPost represents a trending post with engagement score
 type HotPost struct {
 	SubjectURI       string
 	ActorDID         string
@@ -21,7 +20,6 @@ type HotPost struct {
 	LikeCount        uint64
 }
 
-// GetHotPosts retrieves hot/trending posts ordered by score
 func (s *Store) GetHotPosts(ctx context.Context, limit int, minScore float64) (posts []HotPost, err error) {
 	ctx, done := observe(ctx, "query", &err,
 		attribute.Int("limit", limit),
@@ -75,7 +73,6 @@ func (s *Store) GetHotPosts(ctx context.Context, limit int, minScore float64) (p
 	return posts, nil
 }
 
-// GetTopPostsInWindow retrieves top posts by like count within a time window
 func (s *Store) GetTopPostsInWindow(ctx context.Context, hours int, limit int) (posts []HotPost, err error) {
 	ctx, done := observe(ctx, "query", &err,
 		attribute.Int("hours", hours),
@@ -137,7 +134,6 @@ func (s *Store) GetTopPostsInWindow(ctx context.Context, hours int, limit int) (
 	return posts, nil
 }
 
-// LabelPost represents a post from a label feed
 type LabelPost struct {
 	ActorDID  string
 	Rkey      string
@@ -145,7 +141,6 @@ type LabelPost struct {
 	IndexedAt time.Time
 }
 
-// ListMPLS retrieves posts from the mpls feed
 func (s *Store) ListMPLS(ctx context.Context, cursor time.Time, limit int) (posts []LabelPost, err error) {
 	ctx, done := observe(ctx, "query", &err,
 		attribute.String("cursor", cursor.Format(time.RFC3339Nano)),
@@ -185,7 +180,6 @@ func (s *Store) ListMPLS(ctx context.Context, cursor time.Time, limit int) (post
 	return posts, nil
 }
 
-// ListTQSP retrieves posts from the tqsp feed
 func (s *Store) ListTQSP(ctx context.Context, cursor string, limit int) (posts []LabelPost, err error) {
 	ctx, done := observe(ctx, "query", &err,
 		attribute.String("cursor", cursor),

@@ -65,7 +65,6 @@ func setupReplayClickHouse(cctx *cli.Context) (driver.Conn, error) {
 	)
 }
 
-// Replay metrics.
 var (
 	replayRecordsTotal = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "replay_records_total",
@@ -118,7 +117,6 @@ func runReplay(cctx *cli.Context) error {
 	collections := cctx.StringSlice("collections")
 	workers := cctx.Int("workers")
 
-	// Find all .rca files.
 	segments, err := filepath.Glob(filepath.Join(inputDir, "*.rca"))
 	if err != nil {
 		return fmt.Errorf("listing segments: %w", err)
@@ -129,7 +127,6 @@ func runReplay(cctx *cli.Context) error {
 		return fmt.Errorf("no .rca files found in %s", inputDir)
 	}
 
-	// Prepare table for bulk loading.
 	if err := crawler.PrepareTableForBulkLoad(ctx, chConn, cctx.Bool("truncate"), logger); err != nil {
 		return fmt.Errorf("preparing table: %w", err)
 	}
@@ -144,7 +141,6 @@ func runReplay(cctx *cli.Context) error {
 
 	logger.Info("replaying segments", "count", len(segments), "workers", workers, "collections", collections)
 
-	// Fan out segments to workers.
 	segCh := make(chan string)
 	var totalRecords atomic.Int64
 	var wg sync.WaitGroup
@@ -260,7 +256,6 @@ func replaySegment(ctx context.Context, db driver.Conn, segPath string, collecti
 		if ctx.Err() != nil {
 			break
 		}
-		// Check for sender errors between repos.
 		select {
 		case <-sendDone:
 			return int(sent.Load()), sendErr
@@ -292,7 +287,6 @@ func replaySegment(ctx context.Context, db driver.Conn, segPath string, collecti
 		}
 	}
 
-	// Flush remaining records.
 	if len(current.repos) > 0 {
 		sendCh <- current
 	}

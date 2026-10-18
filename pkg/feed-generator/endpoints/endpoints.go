@@ -56,7 +56,6 @@ type DidResponse struct {
 	Service []did.Service `json:"service"`
 }
 
-// Request types for Echo binding
 type GetFeedSkeletonRequest struct {
 	Feed   string `query:"feed"`
 	Limit  string `query:"limit"`
@@ -122,7 +121,6 @@ func NewEndpoints(feedGenerator *feedgenerator.FeedGenerator, chStore *store.Sto
 		TopKUsersAndFeeds:   newTopK(),
 	}
 
-	// Start a routine to periodically flush the top k users and feeds
 	go func() {
 		t := time.NewTicker(time.Minute * 2)
 		for {
@@ -218,7 +216,6 @@ func (ep *Endpoints) GetFeedSkeleton(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
 	}
 
-	// Get userDID from the request context, which is set by the auth middleware
 	userDID, _ := c.Get("actor_did").(string)
 
 	start := time.Now()
@@ -242,13 +239,11 @@ func (ep *Endpoints) GetFeedSkeleton(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "this feed generator does not serve feeds for the given DID"})
 	}
 
-	// Get the feed name from the query
 	feedName := strings.TrimPrefix(req.Feed, feedPrefix)
 	if feedName == "" {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "feed name is required"})
 	}
 
-	// Count the user
 	ep.ProcessUser(feedName, userDID)
 
 	span.SetAttributes(attribute.String("feed.name", feedName))
@@ -285,7 +280,6 @@ func (ep *Endpoints) GetFeedSkeleton(c echo.Context) error {
 		return c.JSON(http.StatusNotFound, map[string]string{"error": "feed not found"})
 	}
 
-	// Get the feed items
 	feedItems, newCursor, err := feed.GetPage(ctx, feedName, userDID, limit, req.Cursor)
 	if err != nil {
 		span.RecordError(err)
@@ -315,28 +309,23 @@ func (ep *Endpoints) GetFeedSkeleton(c echo.Context) error {
 }
 
 func (ep *Endpoints) ProcessUser(feedName string, userDID string) {
-	// Check if the user has ever been seen before
 	if !ep.UniqueSeenUsers.TestString(userDID) {
 		ep.UniqueSeenUsers.AddString(userDID)
 		uniqueFeedUserCounter.Inc()
 	}
 
 	ep.tkLk.Lock()
-	// Update the top k users and feeds
 	key := fmt.Sprintf("%s_%s", userDID, feedName)
 	ep.TopKUsersAndFeeds.Insert([]byte(key), 1)
 	ep.tkLk.Unlock()
 
 	ep.usersLk.Lock()
 	defer ep.usersLk.Unlock()
-	// Check if the feed user list exists
 	if ep.FeedUsers[feedName] == nil {
-		// If not, create the feed user list
 		ep.FeedUsers[feedName] = []string{
 			userDID,
 		}
 	} else {
-		// Check if the user is already in the list
 		if slices.Contains(ep.FeedUsers[feedName], userDID) {
 			return
 		}
@@ -366,7 +355,6 @@ func (ep *Endpoints) AssignUserToFeed(c echo.Context) error {
 		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "not authorized: no user DID in context"})
 	}
 
-	// Cast the rawAuthEntity to a FeedAuthEntity
 	authEntity, ok := rawAuthEntity.(*auth.FeedAuthEntity)
 	if !ok || authEntity == nil {
 		span.SetAttributes(attribute.Bool("feed.assign_label.not_authorized", true))
@@ -422,7 +410,6 @@ func (ep *Endpoints) UnassignUserFromFeed(c echo.Context) error {
 		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "not authorized: no user DID in context"})
 	}
 
-	// Cast the rawAuthEntity to a FeedAuthEntity
 	authEntity, ok := rawAuthEntity.(*auth.FeedAuthEntity)
 	if !ok || authEntity == nil {
 		span.SetAttributes(attribute.Bool("feed.assign_label.not_authorized", true))
@@ -448,11 +435,9 @@ func (ep *Endpoints) UnassignUserFromFeed(c echo.Context) error {
 
 	var userDID string
 
-	// Check if the input is already a DID (starts with "did:")
 	if strings.HasPrefix(req.Handle, "did:") {
 		userDID = req.Handle
 	} else {
-		// Parse as handle and resolve to DID
 		handle, err := syntax.ParseHandle(req.Handle)
 		if err != nil {
 			span.SetAttributes(attribute.Bool("feed.assign_label.invalid_handle", true))
@@ -487,7 +472,6 @@ func (ep *Endpoints) GetFeedMembers(c echo.Context) error {
 		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "not authorized: no user DID in context"})
 	}
 
-	// Cast the rawAuthEntity to a FeedAuthEntity
 	authEntity, ok := rawAuthEntity.(*auth.FeedAuthEntity)
 	if !ok || authEntity == nil {
 		span.SetAttributes(attribute.Bool("feed.get_members.not_authorized", true))
@@ -578,7 +562,6 @@ func (ep *Endpoints) GetFeedMembersPaginated(c echo.Context) error {
 		}
 	}
 
-	// Calculate total pages
 	totalPages := int(totalCount) / req.Limit
 	if int(totalCount)%req.Limit > 0 {
 		totalPages++
@@ -606,7 +589,6 @@ func (ep *Endpoints) GetFeeds(c echo.Context) error {
 	_, span := otel.Tracer("feed-generator").Start(c.Request().Context(), "GetFeeds")
 	defer span.End()
 
-	// Get the authenticated feed alias from context
 	var allowedAlias string
 	if rawAuthEntity := c.Get("feed.auth.entity"); rawAuthEntity != nil {
 		if authEntity, ok := rawAuthEntity.(*auth.FeedAuthEntity); ok && authEntity != nil {
@@ -618,7 +600,6 @@ func (ep *Endpoints) GetFeeds(c echo.Context) error {
 
 	ep.usersLk.RLock()
 	for alias, feed := range ep.FeedGenerator.FeedMap {
-		// Trim the hyphenated prefix if it exists
 		trimmedAlias := alias
 		if _, after, ok := strings.Cut(alias, "-"); ok {
 			trimmedAlias = after
@@ -627,7 +608,6 @@ func (ep *Endpoints) GetFeeds(c echo.Context) error {
 		feedType := reflect.TypeOf(feed).String()
 		feedType = strings.TrimPrefix(feedType, "*")
 
-		// If authenticated, only show the feed the API key has access to
 		if allowedAlias != "" && trimmedAlias != allowedAlias {
 			continue
 		}

@@ -89,7 +89,6 @@ func StartTracing(cctx *cli.Context, opts ...TracingOption) (func(context.Contex
 }
 
 func newTraceProvider(exp sdktrace.SpanExporter, serviceName string, sampler sdktrace.Sampler) *sdktrace.TracerProvider {
-	// Ensure default SDK resources and the required service name are set.
 	r := resource.NewWithAttributes(
 		semconv.SchemaURL,
 		semconv.ServiceName(serviceName),
@@ -149,7 +148,6 @@ func WithoutChildSpans(ctx context.Context) context.Context {
 	return trace.ContextWithSpanContext(ctx, trace.NewSpanContext(cfg))
 }
 
-// TracingOption is a functional option for configuring the Tracing.
 type TracingOption func(*Tracing)
 
 // WithServiceName sets the service name for tracing.
@@ -179,7 +177,6 @@ func WithRootSpanRatio(name string, ratio float64) TracingOption {
 	}
 }
 
-// WithExporter sets a custom span exporter for tracing.
 func WithExporter(exporter sdktrace.SpanExporter) TracingOption {
 	return func(t *Tracing) {
 		t.exporter = exporter
