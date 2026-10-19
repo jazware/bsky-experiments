@@ -42,7 +42,7 @@ func StartMetrics(cctx *cli.Context, opts ...MetricsOption) {
 
 	// Start the metrics server.
 	logger.Info("starting metrics server", "address", m.listenAddr, "path", m.path)
-	if listenAddr != "" {
+	if m.listenAddr != "" {
 		metricsServer := http.DefaultServeMux
 		metricsServer.Handle(m.path, promhttp.Handler())
 		go func() {
@@ -56,7 +56,8 @@ func StartMetrics(cctx *cli.Context, opts ...MetricsOption) {
 type MetricsOption func(*Metrics)
 
 // WithListenAddr sets the listen address for the metrics server.
-// Defaults to :8081 or whatever is set in the CLI flag.
+// Defaults to :8081 or whatever is set in the CLI flag. An empty address
+// disables the server, as an empty flag does.
 func WithListenAddr(addr string) MetricsOption {
 	return func(m *Metrics) {
 		m.listenAddr = addr

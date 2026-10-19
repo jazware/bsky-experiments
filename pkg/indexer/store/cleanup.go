@@ -280,7 +280,7 @@ func (s *Store) GetCleanupStats(ctx context.Context) (stats *CleanupStats, err e
 			sum(num_deleted) AS total_num_deleted,
 			count() AS num_jobs,
 			uniq(repo) AS num_repos
-		FROM repo_cleanup_jobs
+		FROM repo_cleanup_jobs FINAL
 	`
 
 	stats = &CleanupStats{}

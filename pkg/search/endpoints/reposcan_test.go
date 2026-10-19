@@ -24,6 +24,7 @@ import (
 	ipld "github.com/ipfs/go-ipld-format"
 	car "github.com/ipld/go-car"
 	carutil "github.com/ipld/go-car/util"
+	"github.com/multiformats/go-multihash"
 )
 
 type memBlockstore struct {
@@ -313,5 +314,32 @@ func TestFetchRepoCARStreamsWithAuth(t *testing.T) {
 
 	if _, err := scanRepo(context.Background(), client, "did:plc:nope", crit, 0); err == nil || !strings.Contains(err.Error(), "400") {
 		t.Fatalf("missing repo: %v", err)
+	}
+}
+
+func TestCleanupMatchesVideoAndGalleryAsMedia(t *testing.T) {
+	old := time.Now().AddDate(0, 0, -60).Format(time.RFC3339)
+	mh, err := multihash.Sum([]byte("v"), multihash.SHA2_256, -1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	embeds := map[string]*bsky.FeedPost_Embed{
+		"video":   {EmbedVideo: &bsky.EmbedVideo{Video: &lexutil.LexBlob{Ref: lexutil.LexLink(cid.NewCidV1(cid.Raw, mh)), MimeType: "video/mp4"}}},
+		"gallery": {EmbedGallery: &bsky.EmbedGallery{}},
+	}
+	for name, embed := range embeds {
+		t.Run(name, func(t *testing.T) {
+			var buf bytes.Buffer
+			if err := (&bsky.FeedPost{Text: "x", CreatedAt: old, Embed: embed}).MarshalCBOR(&buf); err != nil {
+				t.Fatal(err)
+			}
+			before := time.Now().AddDate(0, 0, -30)
+			if !(cleanupCriteria{types: []string{"post_with_media"}, before: before}).matches("app.bsky.feed.post", buf.Bytes()) {
+				t.Fatal("post_with_media should match")
+			}
+			if (cleanupCriteria{types: []string{"post"}, before: before}).matches("app.bsky.feed.post", buf.Bytes()) {
+				t.Fatal("post should not match")
+			}
+		})
 	}
 }

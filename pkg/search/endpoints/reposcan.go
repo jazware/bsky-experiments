@@ -106,6 +106,7 @@ func (c cleanupCriteria) matches(recType string, data []byte) bool {
 			return false
 		}
 		hasMedia := rec.Embed != nil && ((rec.Embed.EmbedImages != nil && len(rec.Embed.EmbedImages.Images) > 0) ||
+			rec.Embed.EmbedVideo != nil || rec.Embed.EmbedGallery != nil ||
 			(rec.Embed.EmbedRecordWithMedia != nil && rec.Embed.EmbedRecordWithMedia.Media != nil))
 		if hasMedia {
 			return slices.Contains(c.types, "post_with_media")
