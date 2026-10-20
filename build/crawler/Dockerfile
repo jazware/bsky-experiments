@@ -1,5 +1,5 @@
 # Stage 1: Build the Go binary
-FROM golang:1.27.2 AS builder
+FROM golang:1.27.3 AS builder
 
 # Build args for version info
 ARG GIT_COMMIT=unknown
