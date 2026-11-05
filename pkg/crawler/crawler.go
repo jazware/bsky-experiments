@@ -1,11 +1,13 @@
 package crawler
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"log/slog"
 	"net"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -22,6 +24,7 @@ type Config struct {
 	OutputDir     string
 	Workers       int
 	DefaultPDSRPS float64
+	MaxPDSRPS     float64 // caps every PDS's rate; 0 leaves pdsRate's
 	SegmentSize   int64
 	ZstdLevel     int
 	MaxRetries    int
@@ -29,8 +32,16 @@ type Config struct {
 	PageSize      int
 	SkipPDS       []string
 
+	// DIDsFrom crawls the "did<TAB>pds" lines of this file instead of
+	// paging crawl_repos.
+	DIDsFrom string
+	// OutcomesPath, if set, gets one line per DID with its final result.
+	OutcomesPath string
+
+	allowAnyHost bool // tests: crawl httptest's 127.0.0.1
+
 	// Direct mode: write directly to ClickHouse instead of .rca archives.
-	Direct      bool
+	Direct       bool
 	DirectCHConn driver.Conn // Bulk-optimized connection for direct inserts.
 
 	ClickHouseConn driver.Conn
@@ -41,6 +52,7 @@ type Crawler struct {
 	config     Config
 	progress   *Progress
 	dispatcher *Dispatcher
+	outcomes   *OutcomeLog
 	writer     *repoarchive.SegmentWriter
 	chWriter   *CHWriter
 	logger     *slog.Logger
@@ -120,19 +132,96 @@ func (c *Crawler) Run(ctx context.Context) error {
 		go c.writerLoop(ctx)
 	}
 
-	c.dispatcher = NewDispatcher(c.config.DefaultPDSRPS, c.logger)
-	workerPool := NewWorkerPool(c.config.Workers, c.repoQueue, c.crawledQueue, c.progress, c.dispatcher, c.config, c.logger)
+	if c.config.OutcomesPath != "" {
+		outcomes, err := OpenOutcomeLog(c.config.OutcomesPath)
+		if err != nil {
+			return err
+		}
+		c.outcomes = outcomes
+		defer func() {
+			if err := outcomes.Close(); err != nil {
+				c.logger.Error("closing outcome log", "error", err)
+			}
+		}()
+	}
+
+	c.dispatcher = NewDispatcher(c.config.DefaultPDSRPS, c.config.MaxPDSRPS, c.logger)
+	c.dispatcher.onBlocked = func(task *CrawlTask, reason string) {
+		c.progress.MarkFailed(task.DID, "pds_blocked")
+		c.outcomes.Record(Outcome{DID: task.DID, PDS: task.PDS, Result: "pds_blocked", Attempts: task.Attempts, Message: reason})
+	}
+	workerPool := NewWorkerPool(ctx, c.config.Workers, c.repoQueue, c.crawledQueue, c.progress, c.dispatcher, c.outcomes, c.config, c.logger)
 	dispatchErr := make(chan error, 1)
 	go func() {
 		dispatchErr <- c.dispatcher.Run(ctx, workerPool.WorkQueue())
 	}()
 
+	var totalPages int
+	if c.config.DIDsFrom != "" {
+		if err := c.feedFile(); err != nil {
+			cancel()
+			<-dispatchErr
+			workerPool.Stop()
+			return err
+		}
+	} else {
+		totalPages = c.pageLoop(ctx)
+	}
+
+	c.logger.Info("waiting for dispatcher to drain", "remaining", c.dispatcher.Remaining())
+	for !c.dispatcher.Idle() {
+		select {
+		case <-time.After(500 * time.Millisecond):
+		case <-ctx.Done():
+		}
+		if ctx.Err() != nil {
+			break
+		}
+	}
+
+	c.dispatcher.Stop()
+	<-dispatchErr
+
+	workerPool.Stop()
+
+	if c.config.Direct {
+		close(c.crawledQueue)
+		c.wg.Wait()
+
+		c.progress.ClearCursor()
+
+		c.logger.Info("crawl complete",
+			"total_records", c.chWriter.Sent(),
+			"pages", totalPages)
+	} else {
+		close(c.repoQueue)
+		c.wg.Wait()
+
+		if err := c.writer.Close(); err != nil {
+			return fmt.Errorf("closing segment writer: %w", err)
+		}
+
+		c.progress.SetSegmentNum(c.writer.SegmentNum())
+		c.progress.ClearCursor()
+
+		c.logger.Info("crawl complete",
+			"total_repos", c.writer.TotalRepos(),
+			"bytes_written", c.writer.BytesWritten(),
+			"segments", c.writer.SegmentNum(),
+			"pages", totalPages)
+	}
+
+	return nil
+}
+
+// pageLoop feeds the dispatcher from crawl_repos, a page at a time, and
+// returns the number of pages read.
+func (c *Crawler) pageLoop(ctx context.Context) int {
+	var totalPages int
 	cursor := c.progress.GetCursor()
 	if cursor != "" {
 		c.logger.Info("resuming crawl from cursor", "cursor", cursor)
 	}
-
-	var totalPages int
 
 	for {
 		if ctx.Err() != nil {
@@ -206,50 +295,68 @@ func (c *Crawler) Run(ctx context.Context) error {
 		}
 	}
 
-	c.logger.Info("waiting for dispatcher to drain", "remaining", c.dispatcher.Remaining())
-	for c.dispatcher.Remaining() > 0 {
-		select {
-		case <-time.After(500 * time.Millisecond):
-		case <-ctx.Done():
+	return totalPages
+}
+
+// feedFile feeds the dispatcher the "did<TAB>pds" lines of DIDsFrom, each
+// DID once.
+func (c *Crawler) feedFile() error {
+	f, err := os.Open(c.config.DIDsFrom)
+	if err != nil {
+		return fmt.Errorf("opening dids file: %w", err)
+	}
+	defer f.Close()
+
+	pdsGroups := make(map[string][]string)
+	seen := make(map[string]struct{})
+	total, dups := 0, 0
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 64*1024), 1024*1024)
+	for line := 1; sc.Scan(); line++ {
+		text := strings.TrimSpace(sc.Text())
+		if text == "" || strings.HasPrefix(text, "#") {
+			continue
 		}
-		if ctx.Err() != nil {
-			break
+		did, pds, ok := strings.Cut(text, "\t")
+		did, pds = strings.TrimSpace(did), strings.TrimRight(strings.TrimSpace(pds), "/")
+		if !ok || !strings.HasPrefix(did, "did:") || pds == "" {
+			return fmt.Errorf("%s:%d: want did<TAB>pds, got %q", c.config.DIDsFrom, line, text)
 		}
+		if _, dup := seen[did]; dup {
+			dups++
+			continue
+		}
+		seen[did] = struct{}{}
+		if c.skipPDS(pds) {
+			c.outcomes.Record(Outcome{DID: did, PDS: pds, Result: "skipped_pds"})
+			continue
+		}
+		pdsGroups[pds] = append(pdsGroups[pds], did)
+		total++
+	}
+	if err := sc.Err(); err != nil {
+		return fmt.Errorf("reading dids file: %w", err)
 	}
 
-	c.dispatcher.Stop()
-	<-dispatchErr
-
-	workerPool.Stop()
-
-	if c.config.Direct {
-		close(c.crawledQueue)
-		c.wg.Wait()
-
-		c.progress.ClearCursor()
-
-		c.logger.Info("crawl complete",
-			"total_records", c.chWriter.Sent(),
-			"pages", totalPages)
-	} else {
-		close(c.repoQueue)
-		c.wg.Wait()
-
-		if err := c.writer.Close(); err != nil {
-			return fmt.Errorf("closing segment writer: %w", err)
-		}
-
-		c.progress.SetSegmentNum(c.writer.SegmentNum())
-		c.progress.ClearCursor()
-
-		c.logger.Info("crawl complete",
-			"total_repos", c.writer.TotalRepos(),
-			"bytes_written", c.writer.BytesWritten(),
-			"segments", c.writer.SegmentNum(),
-			"pages", totalPages)
+	var junk, dns int
+	if !c.config.allowAnyHost {
+		junk, dns = c.filterJunkPDS(pdsGroups)
 	}
-
+	c.logger.Info("loaded dids file", "path", c.config.DIDsFrom, "dids", total, "duplicates", dups,
+		"pds_count", len(pdsGroups), "junk_pds", junk, "dns_failed", dns)
+	if len(pdsGroups) > 0 {
+		c.dispatcher.Feed(pdsGroups)
+	}
 	return nil
+}
+
+func (c *Crawler) skipPDS(pds string) bool {
+	for _, s := range c.config.SkipPDS {
+		if strings.TrimRight(s, "/") == pds {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Crawler) Shutdown() {
@@ -312,41 +419,87 @@ func (c *Crawler) writerLoop(ctx context.Context) {
 // hostnames don't resolve. It modifies pdsGroups in place and returns the number
 // of PDS entries removed by each filter.
 func (c *Crawler) filterJunkPDS(pdsGroups map[string][]string) (junkCount, dnsCount int) {
+	drop := func(pdsURL, reason, msg string) {
+		for _, did := range pdsGroups[pdsURL] {
+			c.progress.MarkFailed(did, reason)
+			c.outcomes.Record(Outcome{DID: did, PDS: pdsURL, Result: reason, Message: msg})
+		}
+		delete(pdsGroups, pdsURL)
+	}
+
 	for pdsURL := range pdsGroups {
 		if isJunkPDS(pdsURL) {
 			junkCount++
-			delete(pdsGroups, pdsURL)
+			drop(pdsURL, "junk_pds", "")
 		}
 	}
 
-	// Skip DNS checks for known-good infrastructure to avoid unnecessary lookups.
-	resolver := &net.Resolver{PreferGo: true}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
+	// Each host gets its own timeout. The February 2026 crawl shared one 5 s
+	// budget across a page's hosts, so every host after the first few hundred
+	// lookups "failed DNS" and its DIDs were dropped.
+	var hosts []string
 	for pdsURL := range pdsGroups {
 		parsed, err := url.Parse(pdsURL)
 		if err != nil {
 			dnsCount++
-			delete(pdsGroups, pdsURL)
+			drop(pdsURL, "dns_failed", err.Error())
 			continue
 		}
-
-		host := parsed.Hostname()
-
-		if strings.HasSuffix(host, ".host.bsky.network") ||
-			strings.HasSuffix(host, ".bsky.network") {
+		// Skip DNS checks for known-good infrastructure to avoid unnecessary lookups.
+		if isBskyHost(parsed.Hostname()) {
 			continue
 		}
+		hosts = append(hosts, pdsURL)
+	}
 
-		addrs, err := resolver.LookupHost(ctx, host)
-		if err != nil || len(addrs) == 0 {
-			dnsCount++
-			delete(pdsGroups, pdsURL)
-		}
+	failed := resolveHosts(hosts)
+	for pdsURL, err := range failed {
+		dnsCount++
+		drop(pdsURL, "dns_failed", err)
 	}
 
 	return junkCount, dnsCount
+}
+
+// resolveHosts looks up each PDS URL's host, 32 at a time, twice before
+// giving up, and returns the ones that don't resolve with their errors.
+func resolveHosts(pdsURLs []string) map[string]string {
+	resolver := &net.Resolver{PreferGo: true}
+	failed := make(map[string]string)
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 32)
+	for _, pdsURL := range pdsURLs {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			parsed, _ := url.Parse(pdsURL)
+			var lastErr error
+			for range 2 {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				addrs, err := resolver.LookupHost(ctx, parsed.Hostname())
+				cancel()
+				if err == nil && len(addrs) > 0 {
+					return
+				}
+				lastErr = err
+				if dnsErr, ok := err.(*net.DNSError); ok && dnsErr.IsNotFound {
+					break
+				}
+			}
+			msg := "no addresses"
+			if lastErr != nil {
+				msg = lastErr.Error()
+			}
+			mu.Lock()
+			failed[pdsURL] = msg
+			mu.Unlock()
+		}()
+	}
+	wg.Wait()
+	return failed
 }
 
 // isJunkPDS returns true for PDS URLs that are obviously invalid and should

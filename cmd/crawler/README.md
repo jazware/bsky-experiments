@@ -7,14 +7,20 @@ CLI tool that crawls every ATProto repo from every PDS on the network and archiv
 | Command | Description | Key flags |
 |---------|-------------|-----------|
 | `prepare` | Lists the relay's hosts (`listHosts`), enumerates each host's repos with `listRepos`, verifies them and writes the crawl list to `crawl_repos` (truncated first) | `--relay-host` (`https://bsky.network`), `--discovery-workers` (50), `--discovery-rps` (5), `--list-repos-limit` (1000), `--skip-pds`, `--verify` (on) |
-| `crawl` | Full network crawl of the repos in `crawl_repos` | `--output-dir` (`./data/rca`), `--workers` (50), `--default-pds-rps` (5), `--segment-size` (2GB), `--zstd-level` (3), `--page-size` (50000), `--skip-pds`, `--direct` |
-| `replay` | Replay `.rca` archives into the ClickHouse `crawl_records` table | `--input-dir` (`./data/rca`), `--collections` (filter), `--workers` (4), `--truncate` |
+| `crawl` | Full network crawl of the repos in `crawl_repos`, or of a DID file | `--output-dir` (`./data/rca`), `--workers` (50), `--default-pds-rps` (5), `--max-pds-rps` (cap), `--max-retries` (3), `--dids-from`, `--outcomes`, `--segment-size` (2GB), `--zstd-level` (3), `--page-size` (50000), `--skip-pds`, `--direct` |
+| `replay` | Replay `.rca` archives into the ClickHouse `crawl_records` table | `--input-dir` (`./data/rca`), `--collections` (filter), `--workers` (4), `--truncate`, `--append` |
 | `create-mv` | Create the `crawl_records` stats tables and materialized views, and backfill them from existing rows | |
-| `inspect` | Print segment header, index, and per-collection stats | `<segment-file>` positional arg |
+| `inspect` | Print segment header, index, and per-collection stats | `<segment-file>` positional arg, `--repos` (one did, pds, records, crawled_at_us line per repo) |
 | `tally` | Count records across all segments without decompressing | `--input-dir` (`./data/rca`), `--by-collection`, `--workers` (1, raise it on SSDs) |
 | `reset` | Delete the `.rca` files in a directory | `--output-dir` |
 
 `prepare`, `crawl`, `replay` and `create-mv` take the `--clickhouse-address`, `--clickhouse-username` and `--clickhouse-password` flags (or `CLICKHOUSE_*` env vars). Every flag also has an env var (`OUTPUT_DIR`, `WORKERS` and so on, see `env/crawler.env.example`).
+
+`crawl --dids-from FILE` crawls the `did<TAB>pds` lines of a file instead of `crawl_repos` and needs no ClickHouse (it writes segments only). `--outcomes FILE` appends one line per DID with its final result: `did, pds, result, records, collections, crawled_at_us, attempts, status, xrpc_error, message`. Every DID it was given gets exactly one line, so failures can be grepped out and fed back with `--dids-from`.
+
+`replay` without `--append` prepares the table for a bulk load: it kills queries that mention `crawl_records`, stops merges, drops the skip indexes and ends with `OPTIMIZE TABLE crawl_records FINAL`. That's for loading an empty table. To add a recrawl to the live table use `replay --append`, which only INSERTs. `replay` exits non-zero if a segment fails partway.
+
+Rows get `crawled_at` and `time_us` = the time the getRepo request started (so they never outrank a firehose event the snapshot doesn't include), `indexed_at` = insert time. `crawl_records` is `ReplacingMergeTree(time_us)` on `(collection, repo, rkey)` partitioned by month of `crawled_at`, so a repo replayed twice in one month collapses on merge but a repo crawled in two months keeps both copies: check `crawl_records_by_repo` before recrawling a repo that has rows.
 
 With `--verify`, a `did:plc` repo whose PDS doesn't match `plc_did_state` is dropped, and one missing from it is kept as unverified (it could be a new account). `did:web` repos are checked by fetching their DID document.
 
@@ -39,18 +45,27 @@ Receives pages via `Feed()`, maintains per-PDS state with token-bucket rate limi
 - `<1000 DIDs`: default RPS (5)
 - `>=1000 DIDs`: 10 RPS
 
-Error-based adaptation: halves rate every 5 consecutive failures (floor 0.5 RPS). After 10 consecutive failures (`pdsBlockThreshold`), blocks the PDS entirely and skips its remaining DIDs. Successes reset error count and restore the original rate.
+`--max-pds-rps` caps all of these. A PDS also has at most 2x its rate in fetches in flight (at least 2), so hosts that hang until a timeout can't hold every worker and stall the others. A SIGINT aborts fetches in flight and finalizes the open segment; DIDs that were in flight get no outcome line, so resume from `--dids-from` minus the DIDs in `--outcomes`.
+
+Failures are the repo's unless they say something about the host:
+- A 5xx is the repo's failure (PDSes answer 5xx for repos they can't serve). It's retried twice, 30 s and 60 s later, then recorded with its status and XRPC `error`/`message`. It never slows or pauses the host.
+- A 429 pauses the host for its `Retry-After` (default 10 s, at most 10 min) and halves its rate; the repo goes again when the host resumes, up to 10 attempts.
+- Connection, DNS, TLS and timeout errors are host errors: the repo is retried `--max-retries` times (10 s, 20 s, 40 s), every 5 halve the host's rate (floor 0.5 RPS), and 10 in a row pause the host for 1 min, doubling to 15 min; after a pause one more failure pauses it again. A paused host keeps its DIDs.
+- A success restores the host's rate and clears its pauses.
+- The only block: a host that isn't `*.bsky.network` and hasn't served a repo this run, after 10 different repos in a row fail with 5xx (each counted once, after its retries) or 2 h of host errors. Its remaining DIDs are recorded as `pds_blocked` with the reason.
+
+The February 2026 crawl blocked a PDS on 10 consecutive 5xx and dropped its remaining DIDs, and didn't retry 429s or 5xx; that left 3.0M repos on 7 bsky.network PDSes, and 48k rate-limited repos, out of `crawl_records`.
 
 ### 3. Worker Pool (`pkg/crawler/worker.go`)
 
 50 concurrent goroutines (configurable). Each worker:
 1. HTTP GET `{pds}/xrpc/com.atproto.sync.getRepo?did={did}` with `Accept: application/vnd.ipld.car`
-2. Body capped at `MaxRepoSizeMB` (100MB) via `io.LimitReader`
+2. Body capped at `--max-repo-size-mb` (100) via `io.LimitReader`; a repo over it is recorded as `too_large`, not retried. Before this, a repo over the cap read as a truncated CAR and was recorded as `parse_error`, as most likely were the February 2026 crawl's 1,576. They're the most active accounts: recrawl them with a bigger cap and few workers, since a repo is parsed in memory
 3. Custom CAR parser (`pkg/crawler/carrepo/`) that skips SHA256 block verification for ~30-40% CPU savings
 4. MST walk extracts all records, CBOR decoded to JSON with CID links stripped (`cborjson.go`)
 5. Groups records by collection. In archive mode the worker serializes and zstd-compresses the repo block itself and sends it to the writer. With `--direct` it sends the records to the ClickHouse writer (`chwriter.go`).
 
-Error classification: `not_found`, `deactivated`, `takendown` (permanent/per-repo), `rate_limited`, `dns_error`, `unavailable`, `timeout`, `connection_error` (PDS-level, reported to dispatcher for blocking decisions).
+Error classification, from the status and the XRPC `error` in the body: `not_found`, `deactivated`, `takendown` (per repo, final), `unavailable` (5xx, per repo, retried), `http_error` (other 4xx), `rate_limited` (429), and the host errors `dns_error`, `timeout`, `connection_error`.
 
 ### 4. Segment Writer (`writerLoop` in `crawler.go`, `pkg/repoarchive/writer.go`)
 

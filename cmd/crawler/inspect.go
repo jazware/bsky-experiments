@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
+	"os"
 	"sort"
 	"time"
 
@@ -14,6 +16,12 @@ func inspectCommand() *cli.Command {
 		Name:      "inspect",
 		Usage:     "Inspect an .rca segment file",
 		ArgsUsage: "<segment-file>",
+		Flags: []cli.Flag{
+			&cli.BoolFlag{
+				Name:  "repos",
+				Usage: "Print one line per repo (did, pds, records, crawled_at_us) from the TOCs, without decompressing",
+			},
+		},
 		Action: func(cctx *cli.Context) error {
 			return runInspect(cctx)
 		},
@@ -31,6 +39,20 @@ func runInspect(cctx *cli.Context) error {
 		return fmt.Errorf("opening segment: %w", err)
 	}
 	defer reader.Close()
+
+	if cctx.Bool("repos") {
+		w := bufio.NewWriter(os.Stdout)
+		defer w.Flush()
+		for reader.Next() {
+			repo := reader.Repo()
+			var records uint64
+			for _, e := range repo.TOC() {
+				records += uint64(e.RecordCount)
+			}
+			fmt.Fprintf(w, "%s\t%s\t%d\t%d\n", repo.DID, repo.PDS, records, repo.CrawledAt.UnixMicro())
+		}
+		return nil
+	}
 
 	header := reader.Header()
 	fmt.Printf("Segment: %s\n", path)

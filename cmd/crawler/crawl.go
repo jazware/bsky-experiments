@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/jazware/bsky-experiments/pkg/crawler"
 	"github.com/jazware/bsky-experiments/telemetry"
 	"github.com/urfave/cli/v2"
@@ -33,6 +34,33 @@ func crawlCommand() *cli.Command {
 			Usage:   "Default requests per second per PDS",
 			Value:   5,
 			EnvVars: []string{"DEFAULT_PDS_RPS"},
+		},
+		&cli.Float64Flag{
+			Name:    "max-pds-rps",
+			Usage:   "Cap on requests per second to any one PDS (0: the built-in rates, up to 10)",
+			EnvVars: []string{"MAX_PDS_RPS"},
+		},
+		&cli.IntFlag{
+			Name:    "max-retries",
+			Usage:   "Retries per repo after a 5xx, timeout or connection error (429s get up to 10 attempts)",
+			Value:   3,
+			EnvVars: []string{"MAX_RETRIES"},
+		},
+		&cli.IntFlag{
+			Name:    "max-repo-size-mb",
+			Usage:   "Repos bigger than this are recorded as too_large, unparsed",
+			Value:   100,
+			EnvVars: []string{"MAX_REPO_SIZE_MB"},
+		},
+		&cli.StringFlag{
+			Name:    "dids-from",
+			Usage:   "Crawl only the did<TAB>pds lines of this file instead of crawl_repos",
+			EnvVars: []string{"DIDS_FROM"},
+		},
+		&cli.StringFlag{
+			Name:    "outcomes",
+			Usage:   "Append each DID's final result to this file (did, pds, result, records, collections, crawled_at_us, attempts, error)",
+			EnvVars: []string{"OUTCOMES"},
 		},
 		&cli.StringFlag{
 			Name:    "segment-size",
@@ -96,12 +124,21 @@ func runCrawl(cctx *cli.Context) error {
 		defer shutdown(ctx)
 	}
 
-	chConn, err := setupClickHouse(cctx)
-	if err != nil {
-		return fmt.Errorf("clickhouse setup: %w", err)
+	direct := cctx.Bool("direct")
+	didsFrom := cctx.String("dids-from")
+	if didsFrom != "" && direct {
+		return fmt.Errorf("--dids-from writes .rca segments; replay them with replay --append")
 	}
 
-	direct := cctx.Bool("direct")
+	// A DID file needs no ClickHouse: the crawl only writes segments.
+	var chConn driver.Conn
+	if didsFrom == "" {
+		var err error
+		chConn, err = setupClickHouse(cctx)
+		if err != nil {
+			return fmt.Errorf("clickhouse setup: %w", err)
+		}
+	}
 
 	segmentSize, err := parseSize(cctx.String("segment-size"))
 	if err != nil {
@@ -112,6 +149,11 @@ func runCrawl(cctx *cli.Context) error {
 		OutputDir:      cctx.String("output-dir"),
 		Workers:        cctx.Int("workers"),
 		DefaultPDSRPS:  cctx.Float64("default-pds-rps"),
+		MaxPDSRPS:      cctx.Float64("max-pds-rps"),
+		MaxRetries:     cctx.Int("max-retries"),
+		MaxRepoSizeMB:  cctx.Int("max-repo-size-mb"),
+		DIDsFrom:       didsFrom,
+		OutcomesPath:   cctx.String("outcomes"),
 		SegmentSize:    segmentSize,
 		ZstdLevel:      cctx.Int("zstd-level"),
 		PageSize:       cctx.Int("page-size"),

@@ -2,6 +2,7 @@ package crawler
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -28,6 +29,7 @@ type WorkerPool struct {
 	crawledQueue chan *repoarchive.CrawledRepo
 	progress     *Progress
 	dispatcher   *Dispatcher
+	outcomes     *OutcomeLog
 	config       Config
 	logger       *slog.Logger
 	client       *http.Client
@@ -37,15 +39,19 @@ type WorkerPool struct {
 }
 
 func NewWorkerPool(
+	parent context.Context,
 	numWorkers int,
 	repoQueue chan *repoarchive.SerializedRepo,
 	crawledQueue chan *repoarchive.CrawledRepo,
 	progress *Progress,
 	dispatcher *Dispatcher,
+	outcomes *OutcomeLog,
 	config Config,
 	logger *slog.Logger,
 ) *WorkerPool {
-	ctx, cancel := context.WithCancel(context.Background())
+	// Cancelling the crawl aborts fetches in flight, so a shutdown doesn't
+	// wait on a hung PDS and the segment gets its index.
+	ctx, cancel := context.WithCancel(parent)
 
 	wp := &WorkerPool{
 		workQueue:    make(chan *CrawlTask, 1000),
@@ -53,6 +59,7 @@ func NewWorkerPool(
 		crawledQueue: crawledQueue,
 		progress:     progress,
 		dispatcher:   dispatcher,
+		outcomes:     outcomes,
 		config:       config,
 		logger:       logger,
 		client: &http.Client{
@@ -114,6 +121,7 @@ func (wp *WorkerPool) worker(ctx context.Context, id int) {
 }
 
 func (wp *WorkerPool) processTask(ctx context.Context, logger *slog.Logger, task *CrawlTask) {
+	defer wp.dispatcher.Done(task)
 	ctx, span := tracer.Start(ctx, "crawler.processRepo")
 	defer span.End()
 
@@ -133,7 +141,7 @@ func (wp *WorkerPool) processTask(ctx context.Context, logger *slog.Logger, task
 		return
 	}
 
-	wp.dispatcher.ReportResult(task.PDS, true)
+	wp.dispatcher.ReportSuccess(task.PDS)
 
 	span.SetAttributes(
 		attribute.String("repo.rev", crawled.Rev),
@@ -144,11 +152,15 @@ func (wp *WorkerPool) processTask(ctx context.Context, logger *slog.Logger, task
 	repoRecords.Observe(float64(recordCount))
 	repoCollections.Observe(float64(collectionCount))
 
+	success := Outcome{DID: task.DID, PDS: task.PDS, Result: "success", Records: recordCount,
+		Collections: collectionCount, CrawledAt: crawled.CrawledAt, Attempts: task.Attempts + 1}
+
 	if wp.config.Direct {
 		reposProcessedTotal.WithLabelValues("success").Inc()
 		select {
 		case wp.crawledQueue <- crawled:
 			wp.progress.MarkCompleted(task.DID)
+			wp.outcomes.Record(success)
 		case <-ctx.Done():
 			return
 		}
@@ -159,6 +171,8 @@ func (wp *WorkerPool) processTask(ctx context.Context, logger *slog.Logger, task
 		if err != nil {
 			logger.Error("failed to serialize repo", "did", task.DID, "error", err)
 			reposProcessedTotal.WithLabelValues("serialize_error").Inc()
+			wp.outcomes.Record(Outcome{DID: task.DID, PDS: task.PDS, Result: "serialize_error",
+				Attempts: task.Attempts + 1, Message: err.Error()})
 			return
 		}
 
@@ -167,6 +181,7 @@ func (wp *WorkerPool) processTask(ctx context.Context, logger *slog.Logger, task
 		select {
 		case wp.repoQueue <- sr:
 			wp.progress.MarkCompleted(task.DID)
+			wp.outcomes.Record(success)
 		case <-ctx.Done():
 			return
 		}
@@ -183,6 +198,8 @@ func (wp *WorkerPool) fetchAndParseRepo(ctx context.Context, logger *slog.Logger
 	req.Header.Set("Accept", "application/vnd.ipld.car")
 	req.Header.Set("User-Agent", "jaz-crawler/1.0")
 
+	// The repo is the PDS's state at some point after this, so rows stamped
+	// with it never outrank a firehose event the snapshot doesn't include.
 	httpStart := time.Now()
 	resp, err := wp.client.Do(req)
 	httpDuration := time.Since(httpStart).Seconds()
@@ -196,45 +213,20 @@ func (wp *WorkerPool) fetchAndParseRepo(ctx context.Context, logger *slog.Logger
 	httpRequestsTotal.WithLabelValues(strconv.Itoa(resp.StatusCode)).Inc()
 	trace.SpanFromContext(ctx).SetAttributes(attribute.Int("http.status_code", resp.StatusCode))
 
-	switch resp.StatusCode {
-	case http.StatusOK:
-		// Continue processing.
-	case http.StatusNotFound:
-		return nil, 0, 0, &RepoError{Code: resp.StatusCode, Category: "not_found", DID: task.DID}
-	case http.StatusGone:
-		return nil, 0, 0, &RepoError{Code: resp.StatusCode, Category: "deactivated", DID: task.DID}
-	case http.StatusTooManyRequests:
-		return nil, 0, 0, &RepoError{Code: resp.StatusCode, Category: "rate_limited", DID: task.DID, PDS: task.PDS}
-	case http.StatusBadRequest:
-		// Bluesky PDSs return 400 for various permanent repo states instead of
-		// 404/410. Parse the body to categorize appropriately.
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		bodyStr := string(body)
-		switch {
-		case strings.Contains(bodyStr, "RepoNotFound"), strings.Contains(bodyStr, "NotFound"):
-			return nil, 0, 0, &RepoError{Code: resp.StatusCode, Category: "not_found", DID: task.DID}
-		case strings.Contains(bodyStr, "RepoTakendown"):
-			return nil, 0, 0, &RepoError{Code: resp.StatusCode, Category: "takendown", DID: task.DID}
-		case strings.Contains(bodyStr, "RepoDeactivated"):
-			return nil, 0, 0, &RepoError{Code: resp.StatusCode, Category: "deactivated", DID: task.DID}
-		default:
-			return nil, 0, 0, &RepoError{Code: resp.StatusCode, Category: "http_error", DID: task.DID,
-				Err: fmt.Errorf("bad request: %s", bodyStr)}
-		}
-	default:
-		if resp.StatusCode >= 500 {
-			return nil, 0, 0, &RepoError{Code: resp.StatusCode, Category: "unavailable", DID: task.DID, PDS: task.PDS,
-				Err: fmt.Errorf("server error: %s", resp.Status)}
-		}
-		return nil, 0, 0, &RepoError{Code: resp.StatusCode, Category: "http_error", DID: task.DID,
-			Err: fmt.Errorf("unexpected status: %s", resp.Status)}
+	if resp.StatusCode != http.StatusOK {
+		return nil, 0, 0, statusError(resp, task, time.Now())
 	}
 
 	maxBytes := int64(wp.config.MaxRepoSizeMB) * 1024 * 1024
-	limitedBody := io.LimitReader(resp.Body, maxBytes+1)
+	body := &countingReader{r: io.LimitReader(resp.Body, maxBytes+1)}
 
-	r, err := carrepo.ParseRepo(limitedBody)
+	r, err := carrepo.ParseRepo(body)
 	if err != nil {
+		// The cap cuts the CAR off mid-block, which reads as a bad CAR.
+		if body.n > maxBytes {
+			return nil, 0, 0, &RepoError{Category: "too_large", DID: task.DID,
+				Err: fmt.Errorf("repo is over --max-repo-size-mb %d", wp.config.MaxRepoSizeMB)}
+		}
 		return nil, 0, 0, &RepoError{Category: "parse_error", DID: task.DID, Err: fmt.Errorf("reading CAR: %w", err)}
 	}
 
@@ -275,7 +267,7 @@ func (wp *WorkerPool) fetchAndParseRepo(ctx context.Context, logger *slog.Logger
 		DID:         task.DID,
 		PDS:         task.PDS,
 		Rev:         rev,
-		CrawledAt:   time.Now(),
+		CrawledAt:   httpStart,
 		Collections: collections,
 	}, recordCount, len(collections), nil
 }
@@ -294,11 +286,113 @@ func classifyNetworkError(err error, task *CrawlTask) *RepoError {
 }
 
 type RepoError struct {
-	Code     int
-	Category string // "not_found", "deactivated", "takendown", "rate_limited", "http_error", "dns_error", "unavailable", "parse_error", "timeout"
-	DID      string
-	PDS      string
-	Err      error
+	Code       int
+	Category   string // "not_found", "deactivated", "takendown", "rate_limited", "http_error", "dns_error", "unavailable", "parse_error", "timeout"
+	DID        string
+	PDS        string
+	Err        error
+	RetryAfter time.Duration // rate_limited only
+	XRPCError  string        // the response body's "error"
+	XRPCMsg    string        // and its "message"
+}
+
+// statusError classifies a non-200 getRepo response by its status and the
+// XRPC error in its body.
+func statusError(resp *http.Response, task *CrawlTask, now time.Time) *RepoError {
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	var x struct {
+		Error   string `json:"error"`
+		Message string `json:"message"`
+	}
+	if json.Unmarshal(body, &x) != nil {
+		x.Message = strings.TrimSpace(string(body))
+	}
+	e := &RepoError{Code: resp.StatusCode, DID: task.DID, PDS: task.PDS, XRPCError: x.Error, XRPCMsg: x.Message,
+		Err: fmt.Errorf("%s: %s: %s", resp.Status, x.Error, x.Message)}
+
+	switch {
+	case resp.StatusCode == http.StatusTooManyRequests:
+		e.Category = "rate_limited"
+		e.RetryAfter = parseRetryAfter(resp.Header.Get("Retry-After"), now)
+	case x.Error == "RepoTakendown":
+		e.Category = "takendown"
+	case x.Error == "RepoDeactivated", x.Error == "RepoSuspended", resp.StatusCode == http.StatusGone:
+		e.Category = "deactivated"
+	case x.Error == "RepoNotFound", resp.StatusCode == http.StatusNotFound:
+		e.Category = "not_found"
+	case resp.StatusCode >= 500:
+		e.Category = "unavailable"
+	case resp.StatusCode == http.StatusBadRequest && strings.Contains(x.Message+x.Error, "NotFound"):
+		e.Category = "not_found"
+	default:
+		e.Category = "http_error"
+	}
+	return e
+}
+
+var (
+	repo5xxBackoff   = 30 * time.Second
+	hostErrorBackoff = 10 * time.Second
+)
+
+const (
+	defaultRetryAfter = 10 * time.Second
+	// rateLimitAttempts is how often a DID may be fetched while its PDS keeps
+	// answering 429: the PDS pauses each time, so this bounds the wait, not load.
+	rateLimitAttempts = 10
+	repo5xxRetries    = 2
+)
+
+type countingReader struct {
+	r io.Reader
+	n int64
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n += int64(n)
+	return n, err
+}
+
+// parseRetryAfter reads a Retry-After header (seconds or an HTTP date).
+func parseRetryAfter(v string, now time.Time) time.Duration {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return defaultRetryAfter
+	}
+	if secs, err := strconv.Atoi(v); err == nil {
+		if secs <= 0 {
+			return time.Second
+		}
+		return time.Duration(secs) * time.Second
+	}
+	if t, err := http.ParseTime(v); err == nil {
+		if d := t.Sub(now); d > time.Second {
+			return d
+		}
+		return time.Second
+	}
+	return defaultRetryAfter
+}
+
+// retryDelay says whether a failure is worth another attempt, given how many
+// fetches of the DID have been made including this one, and how long to wait.
+func retryDelay(category string, attempts, maxRetries int) (time.Duration, bool) {
+	switch category {
+	case "rate_limited":
+		// The PDS pauses for Retry-After; the DID goes when it resumes.
+		return 0, attempts < rateLimitAttempts
+	case "unavailable":
+		// A 5xx is usually the repo's own state; two more tries, spaced out.
+		return repo5xxBackoff << (attempts - 1), attempts <= repo5xxRetries
+	case "timeout", "connection_error", "dns_error":
+		return hostErrorBackoff << (attempts - 1), attempts <= maxRetries
+	case "parse_error", "unknown":
+		// A body cut off mid-download reads as a bad CAR; one more try.
+		return hostErrorBackoff, attempts < 2
+	default:
+		return 0, false
+	}
 }
 
 func (e *RepoError) Error() string {
@@ -312,11 +406,11 @@ func (e *RepoError) Unwrap() error {
 	return e.Err
 }
 
-// isPDSError returns true if the error category indicates a PDS-level issue
-// (network failure, server error) rather than a per-repo issue (not found, etc).
-func isPDSError(category string) bool {
+// isHostError reports whether a failure says something about the host rather
+// than the repo. 5xx don't: PDSes return them for repos they can't serve.
+func isHostError(category string) bool {
 	switch category {
-	case "dns_error", "unavailable", "timeout", "connection_error", "unknown":
+	case "dns_error", "timeout", "connection_error":
 		return true
 	default:
 		return false
@@ -330,32 +424,48 @@ func (wp *WorkerPool) handleError(ctx context.Context, logger *slog.Logger, task
 
 	repoErr, ok := err.(*RepoError)
 	if !ok {
-		logger.Error("unexpected error", "did", task.DID, "pds", task.PDS, "error", err)
-		wp.progress.MarkFailed(task.DID, "unknown")
-		reposProcessedTotal.WithLabelValues("unknown").Inc()
-		wp.dispatcher.ReportResult(task.PDS, false)
+		repoErr = &RepoError{Category: "unknown", DID: task.DID, PDS: task.PDS, Err: err}
+	}
+	category := repoErr.Category
+	errStr := ""
+	if repoErr.Err != nil {
+		errStr = repoErr.Err.Error()
+	}
+
+	reposProcessedTotal.WithLabelValues(category).Inc()
+
+	switch {
+	case category == "rate_limited":
+		wp.dispatcher.ReportRateLimited(task.PDS, repoErr.RetryAfter)
+	case isHostError(category):
+		wp.dispatcher.ReportHostError(task.PDS, errStr)
+	}
+
+	attempts := task.Attempts + 1
+	if delay, ok := retryDelay(category, attempts, wp.config.MaxRetries); ok {
+		retriesTotal.WithLabelValues(category).Inc()
+		logger.Debug("requeueing repo", "did", task.DID, "pds", task.PDS, "category", category,
+			"attempts", attempts, "delay", delay)
+		wp.dispatcher.Requeue(&CrawlTask{DID: task.DID, PDS: task.PDS, Attempts: attempts, ReadyAt: time.Now().Add(delay)})
 		return
 	}
 
-	reposProcessedTotal.WithLabelValues(repoErr.Category).Inc()
-
-	if isPDSError(repoErr.Category) {
-		wp.dispatcher.ReportResult(task.PDS, false)
+	if category == "unavailable" {
+		wp.dispatcher.ReportRepo5xx(task.PDS, errStr)
 	}
 
-	switch repoErr.Category {
+	switch category {
 	case "not_found", "deactivated", "takendown":
-		logger.Debug("skipping repo", "did", task.DID, "reason", repoErr.Category)
-		wp.progress.MarkFailed(task.DID, repoErr.Category)
-	case "parse_error":
-		logger.Warn("parse error", "did", task.DID, "error", repoErr.Err)
-		wp.progress.MarkFailed(task.DID, repoErr.Category)
-	case "rate_limited":
-		logger.Warn("rate limited by PDS", "pds", task.PDS)
-		wp.progress.MarkFailed(task.DID, repoErr.Category)
+		logger.Debug("skipping repo", "did", task.DID, "reason", category)
 	default:
-		// PDS-level errors: dns_error, unavailable, timeout, http_error, unknown
-		logger.Warn("crawl error", "did", task.DID, "pds", task.PDS, "category", repoErr.Category, "error", repoErr.Err)
-		wp.progress.MarkFailed(task.DID, repoErr.Category)
+		logger.Warn("crawl error", "did", task.DID, "pds", task.PDS, "category", category,
+			"attempts", attempts, "error", errStr)
 	}
+	wp.progress.MarkFailed(task.DID, category)
+	msg := repoErr.XRPCMsg
+	if msg == "" && repoErr.XRPCError == "" {
+		msg = errStr
+	}
+	wp.outcomes.Record(Outcome{DID: task.DID, PDS: task.PDS, Result: category, Attempts: attempts,
+		Status: repoErr.Code, XRPCError: repoErr.XRPCError, Message: msg})
 }

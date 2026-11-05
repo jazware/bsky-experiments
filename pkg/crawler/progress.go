@@ -25,7 +25,7 @@ func NewProgress(logger *slog.Logger) *Progress {
 	categories := []string{
 		"not_found", "deactivated", "takendown", "rate_limited",
 		"parse_error", "http_error", "dns_error", "unavailable",
-		"connection_error", "timeout", "unknown",
+		"connection_error", "timeout", "unknown", "too_large",
 	}
 	counts := make(map[string]*atomic.Int64, len(categories))
 	for _, c := range categories {

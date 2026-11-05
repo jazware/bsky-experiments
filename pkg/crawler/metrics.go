@@ -102,8 +102,18 @@ var (
 
 	pdsBlockedTotal = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "crawler_pds_blocked_total",
-		Help: "PDSs blocked due to consecutive failures.",
+		Help: "PDSs given up on after repeated pauses with no success.",
 	})
+
+	pdsPausedTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "crawler_pds_paused_total",
+		Help: "PDS pauses after consecutive failures.",
+	})
+
+	retriesTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "crawler_retries_total",
+		Help: "Repo fetches requeued for another attempt, by failure category.",
+	}, []string{"category"})
 
 	activePDSGauge = promauto.NewGauge(prometheus.GaugeOpts{
 		Name: "crawler_active_pds",

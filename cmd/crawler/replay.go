@@ -45,6 +45,11 @@ func replayCommand() *cli.Command {
 			Name:  "truncate",
 			Usage: "Truncate crawl_records before replaying",
 		},
+		&cli.BoolFlag{
+			Name: "append",
+			Usage: "Only INSERT into crawl_records: no merge stop, index drop, OPTIMIZE or KILL QUERY around the load. " +
+				"For adding a recrawl to a live table; needs no more than INSERT on it",
+		},
 	)
 
 	return &cli.Command{
@@ -127,22 +132,28 @@ func runReplay(cctx *cli.Context) error {
 		return fmt.Errorf("no .rca files found in %s", inputDir)
 	}
 
-	if err := crawler.PrepareTableForBulkLoad(ctx, chConn, cctx.Bool("truncate"), logger); err != nil {
-		return fmt.Errorf("preparing table: %w", err)
+	appendOnly := cctx.Bool("append")
+	if appendOnly && cctx.Bool("truncate") {
+		return fmt.Errorf("--append and --truncate are exclusive")
 	}
-	// Always restore indexes and merges, even on error/signal.
-	defer func() {
-		logger.Info("finalizing table after bulk load...")
-		bgCtx := context.Background()
-		if err := crawler.FinalizeTableAfterBulkLoad(bgCtx, chConn, logger); err != nil {
-			logger.Error("failed to finalize table", "error", err)
+	if !appendOnly {
+		if err := crawler.PrepareTableForBulkLoad(ctx, chConn, cctx.Bool("truncate"), logger); err != nil {
+			return fmt.Errorf("preparing table: %w", err)
 		}
-	}()
+		// Always restore indexes and merges, even on error/signal.
+		defer func() {
+			logger.Info("finalizing table after bulk load...")
+			bgCtx := context.Background()
+			if err := crawler.FinalizeTableAfterBulkLoad(bgCtx, chConn, logger); err != nil {
+				logger.Error("failed to finalize table", "error", err)
+			}
+		}()
+	}
 
 	logger.Info("replaying segments", "count", len(segments), "workers", workers, "collections", collections)
 
 	segCh := make(chan string)
-	var totalRecords atomic.Int64
+	var totalRecords, failedSegments atomic.Int64
 	var wg sync.WaitGroup
 
 	for range workers {
@@ -154,7 +165,8 @@ func runReplay(cctx *cli.Context) error {
 				count, err := replaySegment(ctx, chConn, segPath, collections, logger)
 				if err != nil {
 					replaySegmentsTotal.WithLabelValues("error").Inc()
-					logger.Error("failed to replay segment", "path", segPath, "error", err)
+					failedSegments.Add(1)
+					logger.Error("failed to replay segment", "path", segPath, "records_sent", count, "error", err)
 					continue
 				}
 				replaySegmentsTotal.WithLabelValues("success").Inc()
@@ -173,7 +185,13 @@ func runReplay(cctx *cli.Context) error {
 	close(segCh)
 	wg.Wait()
 
-	logger.Info("replay complete", "total_records", totalRecords.Load())
+	logger.Info("replay complete", "total_records", totalRecords.Load(), "failed_segments", failedSegments.Load())
+	if n := failedSegments.Load(); n > 0 {
+		return fmt.Errorf("%d segments failed to replay", n)
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 	return nil
 }
 
