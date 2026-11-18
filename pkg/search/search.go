@@ -2,6 +2,7 @@ package search
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -22,12 +23,10 @@ type SearchService struct {
 	RedisClient   *redis.Client
 	StatsCacheTTL time.Duration
 
-	statsCache     *StatsCache
-	statsCacheMux  sync.RWMutex
-	statsReadyChan chan struct{}
-	statsReadyOnce sync.Once
-	shutdownChan   chan struct{}
-	shutdownOnce   sync.Once
+	statsCache    *StatsCache
+	statsCacheMux sync.RWMutex
+	shutdownChan  chan struct{}
+	shutdownOnce  sync.Once
 }
 
 type StatsCache struct {
@@ -66,53 +65,54 @@ func NewSearchService(
 	statsCacheTTL time.Duration,
 ) (*SearchService, error) {
 	ss := &SearchService{
-		Logger:         logger.With("component", "search_service"),
-		Store:          store,
-		UserCount:      userCount,
-		RedisClient:    redisClient,
-		StatsCacheTTL:  statsCacheTTL,
-		statsReadyChan: make(chan struct{}),
-		shutdownChan:   make(chan struct{}),
-	}
-
-	if err := ss.refreshStats(ctx); err != nil {
-		logger.Warn("failed initial stats refresh, will retry in background", "error", err)
-	} else {
-		ss.statsReadyOnce.Do(func() {
-			close(ss.statsReadyChan)
-		})
+		Logger:        logger.With("component", "search_service"),
+		Store:         store,
+		UserCount:     userCount,
+		RedisClient:   redisClient,
+		StatsCacheTTL: statsCacheTTL,
+		shutdownChan:  make(chan struct{}),
 	}
 
 	return ss, nil
 }
 
-func (ss *SearchService) GetStats(ctx context.Context, timeout time.Duration) (*SiteStats, error) {
-	ctx, span := tracer.Start(ctx, "GetStats")
-	defer span.End()
+// ErrStatsNotReady is returned until the first stats refresh has finished;
+// the refresh runs in the background so the server can listen before it.
+var ErrStatsNotReady = errors.New("stats not ready yet")
 
-	select {
-	case <-ss.statsReadyChan:
-	case <-time.After(timeout):
-		return nil, fmt.Errorf("timeout waiting for stats cache to populate")
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
+func (ss *SearchService) GetStats(ctx context.Context) (*SiteStats, error) {
+	_, span := tracer.Start(ctx, "GetStats")
+	defer span.End()
 
 	ss.statsCacheMux.RLock()
 	defer ss.statsCacheMux.RUnlock()
 
 	if ss.statsCache == nil {
-		return nil, fmt.Errorf("stats cache is nil")
+		return nil, ErrStatsNotReady
 	}
 
 	return &ss.statsCache.Stats, nil
 }
 
+// StartStatsRefreshWorker refreshes once right away, then every minute. A
+// failed refresh keeps the last cache.
 func (ss *SearchService) StartStatsRefreshWorker(ctx context.Context) {
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
 
 	logger := ss.Logger.With("worker", "stats_refresh")
+
+	refresh := func() {
+		refreshCtx, span := tracer.Start(ctx, "refreshStats")
+		defer span.End()
+		logger.Info("refreshing site stats")
+
+		if err := ss.refreshStats(refreshCtx); err != nil {
+			logger.Error("error refreshing site stats", "error", err)
+		}
+	}
+
+	refresh()
 
 	for {
 		select {
@@ -123,14 +123,7 @@ func (ss *SearchService) StartStatsRefreshWorker(ctx context.Context) {
 			logger.Info("context cancelled, shutting down stats refresh worker")
 			return
 		case <-ticker.C:
-			refreshCtx, span := tracer.Start(context.Background(), "refreshStats")
-			logger.Info("refreshing site stats")
-
-			if err := ss.refreshStats(refreshCtx); err != nil {
-				logger.Error("error refreshing site stats", "error", err)
-			}
-
-			span.End()
+			refresh()
 		}
 	}
 }
@@ -199,10 +192,6 @@ func (ss *SearchService) refreshStats(ctx context.Context) error {
 	ss.statsCacheMux.Lock()
 	ss.statsCache = newCache
 	ss.statsCacheMux.Unlock()
-
-	ss.statsReadyOnce.Do(func() {
-		close(ss.statsReadyChan)
-	})
 
 	ss.Logger.Info("stats cache refreshed",
 		"total_users", userCount,

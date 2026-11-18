@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	comatproto "github.com/bluesky-social/indigo/api/atproto"
@@ -23,6 +24,10 @@ type UserCount struct {
 
 	RedisClient *redis.Client
 	Prefix      string
+
+	// HostTimeout and Concurrency default to the constants when zero.
+	HostTimeout time.Duration
+	Concurrency int
 
 	mu   sync.RWMutex // guards PDSs
 	PDSs []*PDS
@@ -255,6 +260,16 @@ func NewPDS(host string, rps int) *PDS {
 	}
 }
 
+const (
+	// DefaultHostTimeout bounds each listRepos page request to one PDS.
+	DefaultHostTimeout = 8 * time.Second
+	// DefaultConcurrency bounds how many PDSs are scraped at once.
+	DefaultConcurrency = 16
+)
+
+// GetUserCount sums the per-host counts. A host that errors or times out is
+// skipped for this refresh and keeps its previous count (and cursor), so one
+// hung PDS can't stall or fail the refresh.
 func (uc *UserCount) GetUserCount(ctx context.Context) (int, error) {
 	ctx, span := otel.Tracer("usercount").Start(ctx, "GetUserCount")
 	defer span.End()
@@ -265,87 +280,106 @@ func (uc *UserCount) GetUserCount(ctx context.Context) (int, error) {
 	copy(pdss, uc.PDSs)
 	uc.mu.RUnlock()
 
-	var wg sync.WaitGroup
-	resultCh := make(chan int, len(pdss))
-	errorCh := make(chan error, len(pdss))
+	hostTimeout := uc.HostTimeout
+	if hostTimeout <= 0 {
+		hostTimeout = DefaultHostTimeout
+	}
+	concurrency := uc.Concurrency
+	if concurrency <= 0 {
+		concurrency = DefaultConcurrency
+	}
 
 	slog.Info("refreshing user counts")
+
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, concurrency)
+	var skipped atomic.Int64
 
 	for _, pds := range pdss {
 		wg.Add(1)
 		go func(pds *PDS) {
 			defer wg.Done()
 
-			for {
-				err := pds.Limiter.Wait(ctx)
-				if err != nil {
-					errorCh <- fmt.Errorf("error waiting for rate limiter: %w", err)
-					return
-				}
-
-				repoOutput, err := comatproto.SyncListRepos(ctx, pds.Client, pds.LastCursor, 1000)
-				if err != nil {
-					errorCh <- fmt.Errorf("error listing repos: %w", err)
-					return
-				}
-
-				numActive := 0
-				for _, repo := range repoOutput.Repos {
-					if repo.Active != nil && *repo.Active {
-						numActive++
-					}
-				}
-
-				pds.UserCount += numActive
-				pds.LastPageSize = len(repoOutput.Repos)
-
-				if repoOutput.Cursor == nil {
-					resultCh <- pds.UserCount
-					slog.Info("Finished counting users for PDS", "host", pds.Host, "count", pds.UserCount)
-					return
-				}
-
-				pds.LastCursor = *repoOutput.Cursor
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				return
 			}
+
+			if err := uc.scrapeHost(ctx, pds, hostTimeout); err != nil {
+				skipped.Add(1)
+				slog.Warn("skipping PDS in user count refresh, keeping previous count",
+					"host", pds.Host, "count", pds.UserCount, "error", err)
+				return
+			}
+			slog.Info("Finished counting users for PDS", "host", pds.Host, "count", pds.UserCount)
 		}(pds)
 	}
 
-	go func() {
-		wg.Wait()
-		close(resultCh)
-		close(errorCh)
-	}()
+	wg.Wait()
 
-	var totalUserCount int
-	for count := range resultCh {
-		totalUserCount += count
+	if err := ctx.Err(); err != nil {
+		return -1, err
 	}
 
-	select {
-	case err := <-errorCh:
-		if err != nil {
-			return -1, err
-		}
-	default:
-		// No error
+	total := 0
+	for _, pds := range pdss {
+		total += pds.UserCount
+	}
+	uc.CurrentUserCount = total
+
+	if skipped.Load() > 0 {
+		slog.Warn("user count refresh skipped hosts", "skipped", skipped.Load(), "hosts", len(pdss))
 	}
 
-	uc.CurrentUserCount = totalUserCount
+	if uc.RedisClient == nil {
+		return total, nil
+	}
 
 	pdsList := map[string]any{}
 	for _, pds := range pdss {
 		pdsList[pds.Host] = fmt.Sprintf("%d|%d|%s", pds.UserCount, pds.LastPageSize, pds.LastCursor)
 	}
 
-	err := uc.RedisClient.HSet(ctx, uc.Prefix+":pdslist", pdsList).Err()
-	if err != nil {
+	if err := uc.RedisClient.HSet(ctx, uc.Prefix+":pdslist", pdsList).Err(); err != nil {
 		log.Printf("error setting pds list in redis: %s\n", err)
 	}
 
-	err = uc.RedisClient.Set(ctx, uc.Prefix+":last_user_count", uc.CurrentUserCount, 0).Err()
-	if err != nil {
+	if err := uc.RedisClient.Set(ctx, uc.Prefix+":last_user_count", uc.CurrentUserCount, 0).Err(); err != nil {
 		log.Printf("error setting last user count in redis: %s\n", err)
 	}
 
-	return uc.CurrentUserCount, nil
+	return total, nil
+}
+
+func (uc *UserCount) scrapeHost(ctx context.Context, pds *PDS, hostTimeout time.Duration) error {
+	for {
+		if err := pds.Limiter.Wait(ctx); err != nil {
+			return fmt.Errorf("error waiting for rate limiter: %w", err)
+		}
+
+		reqCtx, cancel := context.WithTimeout(ctx, hostTimeout)
+		repoOutput, err := comatproto.SyncListRepos(reqCtx, pds.Client, pds.LastCursor, 1000)
+		cancel()
+		if err != nil {
+			return fmt.Errorf("error listing repos: %w", err)
+		}
+
+		numActive := 0
+		for _, repo := range repoOutput.Repos {
+			if repo.Active != nil && *repo.Active {
+				numActive++
+			}
+		}
+
+		pds.UserCount += numActive
+		pds.LastPageSize = len(repoOutput.Repos)
+
+		if repoOutput.Cursor == nil {
+			return nil
+		}
+
+		pds.LastCursor = *repoOutput.Cursor
+	}
 }
