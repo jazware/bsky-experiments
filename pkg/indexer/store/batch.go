@@ -415,6 +415,10 @@ func (bi *BatchInserter) insertLikeBatch(ctx context.Context, batch []*LikeBatch
 	ctx, done := observeBatchOp(ctx, "likes", len(batch), &err)
 	defer done()
 
+	if lerr := resolveUnlikes(ctx, batch, bi.store.LookupLikeKeys); lerr != nil {
+		bi.logger.Error("failed to resolve unlikes, inserting them blank", "error", lerr)
+	}
+
 	batchInsert, err := bi.store.DB.PrepareBatch(ctx, "INSERT INTO likes (actor_did, subject_uri, subject_did, subject_collection, subject_rkey, rkey, created_at, deleted, time_us)")
 	if err != nil {
 		return fmt.Errorf("failed to prepare batch: %w", err)

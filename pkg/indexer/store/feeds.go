@@ -93,9 +93,9 @@ func (s *Store) GetTopPostsInWindow(ctx context.Context, hours int, limit int) (
 		INNER JOIN (
 			SELECT
 				subject_uri,
-				countIf(deleted = 0) AS like_count
-			FROM likes
-			WHERE created_at > now() - INTERVAL ? HOUR
+				toUInt64(greatest(sum(likes), 0)) AS like_count
+			FROM likes_hourly
+			WHERE hour >= toStartOfHour(now() - INTERVAL ? HOUR)
 			GROUP BY subject_uri
 		) AS like_stats ON p.uri = like_stats.subject_uri
 		WHERE p.deleted = 0

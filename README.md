@@ -100,7 +100,9 @@ just migrate-dump-schema  # Regenerate full schema reference
 | `repo_records` | Raw firehose events (repo, collection, rkey, operation, record_json) |
 | `posts` | Post content (did, uri, text, langs, parent_uri, root_uri) |
 | `follows` | Social graph follow relationships |
-| `likes` | Post engagement |
+| `likes` | Post engagement. An unlike is a `deleted = 1` row; the indexer fills in its subject and created_at from `like_keys` (last 7 days of likes), else it lands with `subject_uri = ''` |
+| `likes_hourly` | Net likes per (hour, post), 7-day TTL, fed by `likes_hourly_mv`; what the hot and top feeds read |
+| `like_keys` | (actor_did, rkey) to a like's subject, 7-day TTL: how the indexer resolves unlikes |
 | `reposts` | Post sharing |
 | `blocks` | User blocking relationships |
 | `actor_labels` | Access control labels for private feeds |
@@ -114,7 +116,7 @@ just migrate-dump-schema  # Regenerate full schema reference
 
 ### Views
 - `recent_posts` - Posts from last 72 hours
-- `recent_posts_with_score` - Trending posts with engagement scoring
+- `recent_posts_with_score` - Trending posts with engagement scoring, from `likes_hourly`
 - `following_counts` - User following statistics
 - `daily_stats_*` - Materialized views for daily aggregations
 
